@@ -2,9 +2,34 @@ import { autoUpdater } from 'electron-updater'
 import { BrowserWindow, ipcMain } from 'electron'
 
 let mainWin: BrowserWindow | null = null
+let updaterInitialized = false
+let updaterIpcRegistered = false
+let autoCheckScheduled = false
+
+function registerUpdaterIpcHandlers(): void {
+  if (updaterIpcRegistered) return
+  updaterIpcRegistered = true
+
+  ipcMain.handle('updater:check', async () => {
+    await autoUpdater.checkForUpdates()
+  })
+
+  ipcMain.handle('updater:download', async () => {
+    await autoUpdater.downloadUpdate()
+  })
+
+  ipcMain.handle('updater:install', () => {
+    autoUpdater.quitAndInstall()
+  })
+}
 
 export function initUpdater(win: BrowserWindow): void {
+  // Always point updater events to the latest active window.
   mainWin = win
+
+  // Listener/IPC registration must only happen once per app lifecycle.
+  if (updaterInitialized) return
+  updaterInitialized = true
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
@@ -36,23 +61,15 @@ export function initUpdater(win: BrowserWindow): void {
     mainWin?.webContents.send('updater:error', err?.message || 'Unknown error')
   })
 
-  // Register IPC handlers
-  ipcMain.handle('updater:check', () => {
-    autoUpdater.checkForUpdates()
-  })
+  registerUpdaterIpcHandlers()
 
-  ipcMain.handle('updater:download', () => {
-    autoUpdater.downloadUpdate()
-  })
-
-  ipcMain.handle('updater:install', () => {
-    autoUpdater.quitAndInstall()
-  })
-
-  // Auto-check 3 seconds after launch
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {
-      // Silently fail (e.g. no internet)
-    })
-  }, 3000)
+  // Auto-check 3 seconds after launch.
+  if (!autoCheckScheduled) {
+    autoCheckScheduled = true
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {
+        // Silently fail (e.g. no internet)
+      })
+    }, 3000)
+  }
 }
