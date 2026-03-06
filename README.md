@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="axon_logo.png" alt="Axon Logo" width="128" />
+  <img src="Axon-Banner.png" alt="Axon Banner" />
 </p>
-
-<h1 align="center">Axon</h1>
 
 <p align="center">
   A powerful, lightweight 2D map editor for game developers.<br/>
@@ -10,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform" />
   <img src="https://img.shields.io/badge/electron-40.7-47848F" alt="Electron" />
   <img src="https://img.shields.io/badge/svelte-5-FF3E00" alt="Svelte" />

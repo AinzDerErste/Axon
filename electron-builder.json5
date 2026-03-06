@@ -29,9 +29,8 @@
   },
   "publish": [
     {
-      "provider": "github",
-      "owner": "AinzDerErste",
-      "repo": "Axon"
+      "provider": "generic",
+      "url": "https://raw.githubusercontent.com/AinzDerErste/Axon/release/updates"
     }
   ]
 }
