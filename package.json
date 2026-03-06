@@ -1,0 +1,26 @@
+{
+  "name": "axon",
+  "version": "1.0.0",
+  "description": "Axon",
+  "productName": "Axon",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@tsconfig/svelte": "^5.0.8",
+    "electron": "^40.7.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "svelte": "^5.53.7",
+    "typescript": "^5.9.3"
+  }
+}

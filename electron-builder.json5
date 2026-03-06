@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.mapeditor.axon",
+  "productName": "Axon",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "out/**/*"
+  ],
+  "extraResources": [
+    { "from": "build/icon.png", "to": "icon.png" }
+  ],
+  "icon": "build/icon.ico",
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [
+      { "target": "portable", "arch": ["x64"] },
+      { "target": "nsis", "arch": ["x64"] }
+    ]
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-portable.${ext}"
+  },
+  "nsis": {
+    "oneClick": true,
+    "allowToChangeInstallationDirectory": false,
+    "artifactName": "${productName}-${version}-setup.${ext}"
+  }
+}
