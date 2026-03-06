@@ -9,6 +9,7 @@
   import NewMapDialog from './components/dialogs/NewMapDialog.svelte'
   import MapPropertiesDialog from './components/dialogs/MapPropertiesDialog.svelte'
   import SettingsDialog from './components/dialogs/SettingsDialog.svelte'
+  import AboutDialog from './components/dialogs/AboutDialog.svelte'
   import { undo, redo, getHistory } from './lib/stores/history-store'
   import { getMap, setMap } from './lib/stores/map-store'
   import {
@@ -21,8 +22,56 @@
   let showNewMapDialog = $state(false)
   let showMapPropertiesDialog = $state(false)
   let showSettingsDialog = $state(false)
+  let showAboutDialog = $state(false)
   let windowTitle = $state('Axon')
   let isSaving = $state(false)
+
+  // Resizable sidebar
+  const SIDEBAR_MIN = 200
+  const SIDEBAR_MAX = 500
+  const SIDEBAR_DEFAULT = 280
+  const SIDEBAR_STORAGE_KEY = 'sidebarWidth'
+
+  let sidebarWidth = $state(loadSidebarWidth())
+  let isResizingSidebar = $state(false)
+  let resizeStartX = 0
+  let resizeStartWidth = 0
+
+  function loadSidebarWidth(): number {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+      if (stored) {
+        const val = parseInt(stored, 10)
+        if (!isNaN(val) && val >= SIDEBAR_MIN && val <= SIDEBAR_MAX) return val
+      }
+    } catch { /* ignore */ }
+    return SIDEBAR_DEFAULT
+  }
+
+  function startSidebarResize(e: PointerEvent) {
+    isResizingSidebar = true
+    resizeStartX = e.clientX
+    resizeStartWidth = sidebarWidth
+    const target = e.currentTarget as HTMLElement
+    target.setPointerCapture(e.pointerId)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  function onResizeMove(e: PointerEvent) {
+    if (!isResizingSidebar) return
+    const dx = resizeStartX - e.clientX  // drag left = wider
+    const newWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, resizeStartWidth + dx))
+    sidebarWidth = newWidth
+  }
+
+  function onResizeEnd(_e: PointerEvent) {
+    if (!isResizingSidebar) return
+    isResizingSidebar = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarWidth)) } catch { /* ignore */ }
+  }
 
   onMount(() => {
     // Apply persisted settings on startup (e.g., maxUndo)
@@ -102,6 +151,7 @@
       case 'map-properties': showMapPropertiesDialog = true; break
       case 'toggle-grid': window.dispatchEvent(new CustomEvent('toggle-grid')); break
       case 'settings': showSettingsDialog = true; break
+      case 'about': showAboutDialog = true; break
       case 'check-for-updates':
         window.dispatchEvent(new CustomEvent('update:check'))
         break
@@ -428,6 +478,7 @@
 <NewMapDialog bind:show={showNewMapDialog} onclose={() => {}} />
 <MapPropertiesDialog bind:show={showMapPropertiesDialog} />
 <SettingsDialog bind:show={showSettingsDialog} />
+<AboutDialog bind:show={showAboutDialog} />
 
 <div class="app-layout">
   <TitleBar title={windowTitle} onaction={handleMenuAction} />
@@ -436,7 +487,15 @@
     <div class="canvas-container">
       <MapCanvas />
     </div>
-    <Sidebar />
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="sidebar-resize-handle"
+      class:active={isResizingSidebar}
+      onpointerdown={startSidebarResize}
+      onpointermove={onResizeMove}
+      onpointerup={onResizeEnd}
+    ></div>
+    <Sidebar width={sidebarWidth} />
   </div>
   <StatusBar />
 </div>
@@ -467,6 +526,20 @@
     flex: 1;
     position: relative;
     overflow: hidden;
+  }
+
+  .sidebar-resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .sidebar-resize-handle:hover,
+  .sidebar-resize-handle.active {
+    background: var(--accent);
   }
 
   .saving-overlay {

@@ -51,6 +51,14 @@
         { separator: true, label: '' },
         { label: 'Reload', role: 'reload', accelerator: 'Ctrl+R' }
       ]
+    },
+    {
+      label: 'About',
+      items: [
+        { label: 'About Axon', action: 'about' },
+        { separator: true, label: '' },
+        { label: 'Check for Updates\u2026', action: 'check-for-updates' }
+      ]
     }
   ]
 

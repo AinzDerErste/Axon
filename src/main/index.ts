@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers'
 import { createAppMenu } from './menu'
@@ -47,11 +47,19 @@ app.whenReady().then(() => {
   createAppMenu()
 
   ipcMain.handle('app:getVersion', () => app.getVersion())
+  ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
 
   const win = createWindow()
 
   if (app.isPackaged) {
     initUpdater(win)
+  } else {
+    // Dev mode: register stub handlers so IPC calls don't throw
+    ipcMain.handle('updater:check', () => {
+      win.webContents.send('updater:update-not-available')
+    })
+    ipcMain.handle('updater:download', () => {})
+    ipcMain.handle('updater:install', () => {})
   }
 
   app.on('activate', () => {

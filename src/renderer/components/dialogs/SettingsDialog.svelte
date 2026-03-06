@@ -192,7 +192,7 @@
               <span class="field-hint">Zoom level when jumping to a selected object (0 = keep current zoom)</span>
             </div>
           </div>
-        {:else}
+        {:else if activeTab === 'keybindings'}
           <div class="keybindings">
             {#each ['Tools', 'Canvas'] as category}
               <div class="kb-category">
@@ -248,6 +248,7 @@
           <button class="apply-btn" onclick={handleApply}>Apply</button>
         {/if}
       </div>
+
     </div>
   </div>
 {/if}

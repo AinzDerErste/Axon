@@ -155,7 +155,7 @@
   .update-toast {
     position: fixed;
     bottom: 36px;
-    right: 12px;
+    left: 12px;
     display: flex;
     flex-direction: column;
     gap: 6px;

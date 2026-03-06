@@ -3,9 +3,15 @@
   import TilePalette from '../panels/TilePalette.svelte'
   import ObjectPanel from '../panels/ObjectPanel.svelte'
   import PropertiesPanel from '../panels/PropertiesPanel.svelte'
+
+  interface Props {
+    width?: number
+  }
+
+  let { width }: Props = $props()
 </script>
 
-<div class="sidebar">
+<div class="sidebar" style={width ? `width: ${width}px; min-width: ${width}px;` : ''}>
   <LayerPanel />
   <TilePalette />
   <ObjectPanel />

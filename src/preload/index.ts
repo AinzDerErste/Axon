@@ -1,6 +1,12 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, shell } from 'electron'
 
 const electronAPI = {
+  versions: {
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node
+  },
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   showOpenDialog: (options: Electron.OpenDialogOptions) =>
     ipcRenderer.invoke('dialog:showOpen', options),
   showSaveDialog: (options: Electron.SaveDialogOptions) =>
