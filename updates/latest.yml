@@ -1,8 +1,8 @@
-version: 1.2.1
+version: 1.2.2
 files:
-  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.2.1/Axon-1.2.1-setup.exe
-    sha512: FNYcNYCpD8lklttTttmWpoZCd+VsKDR6s+yMQ3HrfvrBJbIRlfdfIPArn/+1lySxpq6Bqxwfz6RZTO//YWckiQ==
-    size: 90297766
-path: https://github.com/AinzDerErste/Axon/releases/download/v1.2.1/Axon-1.2.1-setup.exe
-sha512: FNYcNYCpD8lklttTttmWpoZCd+VsKDR6s+yMQ3HrfvrBJbIRlfdfIPArn/+1lySxpq6Bqxwfz6RZTO//YWckiQ==
-releaseDate: '2026-03-06T19:40:46.817Z'
+  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.2.2/Axon-1.2.2-setup.exe
+    sha512: rB7qwYTYKce4OeBSh4hqifhGX4HiTcUBEm3tiZNYqjm9TvaQpbaxGdWy4FQq72K08UVKEkcp2ByfrBXK6Y+9mA==
+    size: 90296890
+path: https://github.com/AinzDerErste/Axon/releases/download/v1.2.2/Axon-1.2.2-setup.exe
+sha512: rB7qwYTYKce4OeBSh4hqifhGX4HiTcUBEm3tiZNYqjm9TvaQpbaxGdWy4FQq72K08UVKEkcp2ByfrBXK6Y+9mA==
+releaseDate: '2026-03-06T20:29:49.687Z'
