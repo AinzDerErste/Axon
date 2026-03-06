@@ -9,8 +9,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "release": "node scripts/release.mjs"
+    "dist": "npm run build && electron-builder"
   },
   "keywords": [],
   "author": "",
