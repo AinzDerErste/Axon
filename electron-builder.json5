@@ -26,5 +26,12 @@
     "oneClick": true,
     "allowToChangeInstallationDirectory": false,
     "artifactName": "${productName}-${version}-setup.${ext}"
-  }
+  },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "AinzDerErste",
+      "repo": "Axon"
+    }
+  ]
 }

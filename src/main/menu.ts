@@ -83,6 +83,15 @@ export function createAppMenu(): void {
         { type: 'separator' },
         { role: 'reload' }
       ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Check for Updates…',
+          click: () => sendMenuAction('check-for-updates')
+        }
+      ]
     }
   ]
 

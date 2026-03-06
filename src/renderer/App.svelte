@@ -4,6 +4,7 @@
   import Toolbar from './components/layout/Toolbar.svelte'
   import Sidebar from './components/layout/Sidebar.svelte'
   import StatusBar from './components/layout/StatusBar.svelte'
+  import UpdateToast from './components/layout/UpdateToast.svelte'
   import MapCanvas from './components/canvas/MapCanvas.svelte'
   import NewMapDialog from './components/dialogs/NewMapDialog.svelte'
   import MapPropertiesDialog from './components/dialogs/MapPropertiesDialog.svelte'
@@ -101,6 +102,9 @@
       case 'map-properties': showMapPropertiesDialog = true; break
       case 'toggle-grid': window.dispatchEvent(new CustomEvent('toggle-grid')); break
       case 'settings': showSettingsDialog = true; break
+      case 'check-for-updates':
+        window.dispatchEvent(new CustomEvent('update:check'))
+        break
     }
   }
 
@@ -436,6 +440,7 @@
   </div>
   <StatusBar />
 </div>
+<UpdateToast />
 
 {#if isSaving}
   <div class="saving-overlay">

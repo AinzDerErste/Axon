@@ -1,9 +1,10 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers'
 import { createAppMenu } from './menu'
+import { initUpdater } from './updater'
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
     : join(__dirname, '../../build/icon.png')
@@ -37,16 +38,26 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 app.whenReady().then(() => {
   registerIpcHandlers()
   createAppMenu()
-  createWindow()
+
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+
+  const win = createWindow()
+
+  if (app.isPackaged) {
+    initUpdater(win)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      const newWin = createWindow()
+      if (app.isPackaged) initUpdater(newWin)
     }
   })
 })

@@ -32,7 +32,28 @@ const electronAPI = {
   scanImageMeta: (folderPath: string) =>
     ipcRenderer.invoke('folder:scanImageMeta', folderPath) as Promise<{ name: string; filePath: string; mtimeMs: number }[]>,
   readImageFile: (filePath: string) =>
-    ipcRenderer.invoke('folder:readImageFile', filePath) as Promise<{ data: string; name: string } | null>
+    ipcRenderer.invoke('folder:readImageFile', filePath) as Promise<{ data: string; name: string } | null>,
+
+  // Auto-update API
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => {
+    ipcRenderer.on('updater:update-available', (_event, info) => callback(info))
+  },
+  onUpdateNotAvailable: (callback: () => void) => {
+    ipcRenderer.on('updater:update-not-available', () => callback())
+  },
+  onDownloadProgress: (callback: (progress: { percent: number }) => void) => {
+    ipcRenderer.on('updater:download-progress', (_event, progress) => callback(progress))
+  },
+  onUpdateDownloaded: (callback: () => void) => {
+    ipcRenderer.on('updater:update-downloaded', () => callback())
+  },
+  onUpdateError: (callback: (message: string) => void) => {
+    ipcRenderer.on('updater:error', (_event, message) => callback(message))
+  }
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

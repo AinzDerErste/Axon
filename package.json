@@ -1,6 +1,6 @@
 {
   "name": "axon",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Axon",
   "productName": "Axon",
   "main": "./out/main/index.js",
@@ -22,5 +22,8 @@
     "electron-vite": "^5.0.0",
     "svelte": "^5.53.7",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
