@@ -300,6 +300,8 @@
     <SpritesheetSlicer
       imageData={slicerImageData}
       imageName={slicerImageName}
+      initialTileWidth={getMap()?.config.tileWidth}
+      initialTileHeight={getMap()?.config.tileHeight}
       onconfirm={handleSlicerConfirm}
       oncancel={handleSlicerCancel}
     />

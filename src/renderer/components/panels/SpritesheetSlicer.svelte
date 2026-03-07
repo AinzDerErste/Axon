@@ -6,14 +6,18 @@
   interface Props {
     imageData: string
     imageName: string
+    initialTileWidth?: number
+    initialTileHeight?: number
     onconfirm: (e: CustomEvent<Tileset>) => void
     oncancel: () => void
   }
 
-  let { imageData, imageName, onconfirm, oncancel }: Props = $props()
+  let { imageData, imageName, initialTileWidth, initialTileHeight, onconfirm, oncancel }: Props = $props()
 
-  let tileWidth = $state(64)
-  let tileHeight = $state(64)
+  // svelte-ignore state_referenced_locally — intentionally capturing initial prop values only
+  let tileWidth = $state(initialTileWidth || 64)
+  // svelte-ignore state_referenced_locally
+  let tileHeight = $state(initialTileHeight || 64)
   let margin = $state(0)
   let spacing = $state(0)
   let skipEmpty = $state(true)
