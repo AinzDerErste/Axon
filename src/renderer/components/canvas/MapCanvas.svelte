@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { MapRenderer, getNextZoneColor } from '../../lib/engine/renderer'
+  import { MapRenderer, getNextZoneColor, type PreviewObject } from '../../lib/engine/renderer'
   import { screenToMap, snapToTileCorner } from '../../lib/engine/iso-math'
   import {
     getMap, setActiveLayer, updateImageLayer, updateObject,
@@ -8,7 +8,7 @@
     subscribe as mapSubscribe
   } from '../../lib/stores/map-store'
   import { setHover, setZoomPercent } from '../../lib/stores/ui-store'
-  import { getActiveTool } from '../../lib/stores/tool-store'
+  import { getActiveTool, setActiveTool } from '../../lib/stores/tool-store'
   import { getHistory, executeCommand } from '../../lib/stores/history-store'
   import { PaintCommand } from '../../lib/commands/paint-command'
   import { EraseCommand } from '../../lib/commands/erase-command'
@@ -26,6 +26,14 @@
   import type { TileRef } from '../../lib/models/tile'
   import type { MapObject, ImageLayer } from '../../lib/models/layer'
   import { getSketchSettings, subscribe as sketchSubscribe } from '../../lib/stores/sketch-store'
+  import {
+    getPresets, addPreset, getSelectedPresetId, getPresetById, selectPreset,
+    getPresetObjectBitmap,
+    subscribe as presetSubscribe
+  } from '../../lib/stores/preset-store'
+  import { PlacePresetCommand } from '../../lib/commands/preset-command'
+  import { mapToScreen } from '../../lib/engine/iso-math'
+  import type { Preset, PresetObject, PresetZone } from '../../lib/models/preset'
   import { matchesKey } from '../../lib/stores/keybindings-store'
   import SketchToolbar from './SketchToolbar.svelte'
 
@@ -325,11 +333,140 @@
     renderer.markDirty()
   }
 
+  // ── Preset extraction from object selection ──
+
+  function extractPresetFromObjects(): Preset | null {
+    const map = getMap()
+    if (!map) return null
+    const sel = getSelection()
+    const ids = sel?.type === 'objects' ? sel.objectIds : ctxMenuObjId ? [ctxMenuObjId] : []
+    if (ids.length === 0) return null
+    const layerId = ctxMenuLayerId || (sel?.type === 'objects' ? sel.layerId : null)
+    if (!layerId) return null
+    const layer = map.layers.find(l => l.id === layerId)
+    if (!layer || (layer.type !== 'object' && layer.type !== 'drawing')) return null
+
+    const objs = ids
+      .map(id => layer.objects.find(o => o.id === id))
+      .filter((o): o is import('../../lib/models/layer').MapObject => !!o)
+    if (objs.length === 0) return null
+
+    // Bounding box in world coords
+    let bbMinX = Infinity, bbMinY = Infinity, bbMaxX = -Infinity, bbMaxY = -Infinity
+    for (const obj of objs) {
+      bbMinX = Math.min(bbMinX, obj.x)
+      bbMinY = Math.min(bbMinY, obj.y)
+      bbMaxX = Math.max(bbMaxX, obj.x + obj.width)
+      bbMaxY = Math.max(bbMaxY, obj.y + obj.height)
+    }
+
+    const presetObjects: PresetObject[] = objs.map(obj => ({
+      name: obj.name,
+      imageDataUrl: obj.imageDataUrl,
+      relX: obj.x - bbMinX,
+      relY: obj.y - bbMinY,
+      width: obj.width,
+      height: obj.height,
+      flipX: obj.flipX,
+      flipY: obj.flipY,
+      rotation: obj.rotation
+    }))
+
+    // Collect zones within bounding box from object layers
+    const presetZones: PresetZone[] = []
+    for (const l of map.layers) {
+      if (l.type !== 'object' || !l.visible) continue
+      for (const zone of l.zones) {
+        const allInside = zone.points.every(p =>
+          p.x >= bbMinX && p.x <= bbMaxX && p.y >= bbMinY && p.y <= bbMaxY
+        )
+        if (allInside && zone.points.length > 0) {
+          presetZones.push({
+            name: zone.name,
+            color: zone.color,
+            points: zone.points.map(p => ({ relX: p.x - bbMinX, relY: p.y - bbMinY })),
+            closed: zone.closed,
+            zoneType: zone.zoneType
+          })
+        }
+      }
+    }
+
+    // Generate thumbnail
+    let thumbnail: string | undefined
+    try {
+      const thumbCanvas = document.createElement('canvas')
+      const thumbSize = 128
+      thumbCanvas.width = thumbSize
+      thumbCanvas.height = thumbSize
+      const thumbCtx = thumbCanvas.getContext('2d')
+      if (thumbCtx) {
+        const bW = bbMaxX - bbMinX
+        const bH = bbMaxY - bbMinY
+        const scale = Math.min(thumbSize / bW, thumbSize / bH) * 0.9
+        const offX = (thumbSize - bW * scale) / 2
+        const offY = (thumbSize - bH * scale) / 2
+        for (const obj of objs) {
+          if (obj.imageBitmap) {
+            thumbCtx.drawImage(
+              obj.imageBitmap,
+              (obj.x - bbMinX) * scale + offX,
+              (obj.y - bbMinY) * scale + offY,
+              obj.width * scale,
+              obj.height * scale
+            )
+          }
+        }
+        thumbnail = thumbCanvas.toDataURL('image/png')
+      }
+    } catch { /* thumbnail is optional */ }
+
+    return {
+      id: crypto.randomUUID(),
+      name: 'Preset',
+      width: Math.ceil(bbMaxX - bbMinX),
+      height: Math.ceil(bbMaxY - bbMinY),
+      tileLayers: [],
+      objects: presetObjects,
+      zones: presetZones,
+      thumbnail
+    }
+  }
+
+  function openPresetNameDialogFromObjects() {
+    closeCanvasContextMenu()
+    presetNameValue = `Preset ${getPresets().length + 1}`
+    showPresetNameDialog = true
+  }
+
+  function savePresetFromSelection() {
+    const preset = extractPresetFromObjects()
+    if (!preset) return
+    preset.name = presetNameValue.trim() || `Preset ${getPresets().length + 1}`
+    addPreset(preset)
+    showPresetNameDialog = false
+    presetNameValue = ''
+  }
+
+  function cancelPresetNameDialog() {
+    showPresetNameDialog = false
+    presetNameValue = ''
+  }
+
+  function focusOnMount(el: HTMLElement) {
+    requestAnimationFrame(() => el.focus())
+  }
+
   // Marquee (drag-select) state
   let isMarqueeSelecting = false
   let marqueeStartWX = 0
   let marqueeStartWY = 0
   let marqueeLayerId: string | null = null
+
+  // Preset name dialog
+  let showPresetNameDialog = $state(false)
+  let presetNameValue = $state('')
+  let presetNameInputRef = $state<HTMLInputElement | null>(null)
 
   // Image layer drag/resize state
   let isDraggingImageLayer = false
@@ -482,7 +619,7 @@
     }
 
     function handlePointerDown(e: PointerEvent) {
-      // Close context menu on any pointer down
+      // Close context menus on any pointer down
       if (showCanvasContextMenu) closeCanvasContextMenu()
 
       const map = getMap()
@@ -501,6 +638,22 @@
       const tool = getActiveTool()
       const activeLayer = map.layers.find(l => l.id === map.activeLayerId)
       if (!activeLayer) return
+
+      // Stamp tool: place selected preset
+      if (tool === 'stamp') {
+        const presetId = getSelectedPresetId()
+        const preset = presetId ? getPresetById(presetId) : null
+        if (preset) {
+          const coords = getMapCoords(e)
+          if (!coords) return
+          const { col, row } = coords
+          const anchorScreen = mapToScreen(col, row, map.config.tileWidth, map.config.tileHeight, map.config.orientation)
+          const cmd = new PlacePresetCommand(preset, col, row, anchorScreen.x, anchorScreen.y, map)
+          executeCommand(cmd)
+          renderer.markDirty()
+        }
+        return
+      }
 
       // Image layer: select, drag, or resize
       if (activeLayer.type === 'image') {
@@ -792,10 +945,12 @@
 
       if (activeLayer.type !== 'tile') return
 
+      // Clear tile selection when using paint/eraser/fill tools
       if (tool === 'paint') {
         const selectedTile = getSelectedTile()
         if (!selectedTile) return
         isDrawing = true
+        renderer.previewTiles = null
         paintedCells = new Set()
         strokePositions = []
         strokePreviousTiles = []
@@ -1323,11 +1478,88 @@
         renderer.hoverCol = col
         renderer.hoverRow = row
         setHover(col, row)
+
+        // Tile placement preview (holo)
+        const tool = getActiveTool()
+        if (tool === 'paint' && !isDrawing) {
+          const selectedTile = getSelectedTile()
+          if (selectedTile) {
+            renderer.previewTiles = [{ col, row, tileRef: selectedTile }]
+          } else {
+            renderer.previewTiles = null
+          }
+        } else if (tool === 'stamp') {
+          const presetId = getSelectedPresetId()
+          const preset = presetId ? getPresetById(presetId) : null
+          if (preset) {
+            // Tile previews
+            const previews: { col: number; row: number; tileRef: import('../../lib/models/tile').TileRef }[] = []
+            for (const presetLayer of preset.tileLayers) {
+              for (let r = 0; r < presetLayer.tiles.length; r++) {
+                for (let c = 0; c < presetLayer.tiles[r].length; c++) {
+                  const tileRef = presetLayer.tiles[r][c]
+                  if (tileRef) previews.push({ col: col + c, row: row + r, tileRef })
+                }
+              }
+            }
+            renderer.previewTiles = previews.length > 0 ? previews : null
+
+            // Object previews
+            if (preset.objects.length > 0) {
+              const anchorScreen = mapToScreen(col, row, map.config.tileWidth, map.config.tileHeight, map.config.orientation)
+              const objPreviews: PreviewObject[] = []
+              for (let i = 0; i < preset.objects.length; i++) {
+                const pObj = preset.objects[i]
+                const bmp = getPresetObjectBitmap(preset.id, i)
+                if (!bmp) continue
+                objPreviews.push({
+                  imageBitmap: bmp,
+                  x: anchorScreen.x + pObj.relX,
+                  y: anchorScreen.y + pObj.relY,
+                  width: pObj.width, height: pObj.height,
+                  rotation: pObj.rotation, flipX: pObj.flipX, flipY: pObj.flipY
+                })
+              }
+              renderer.previewObjects = objPreviews.length > 0 ? objPreviews : null
+            } else {
+              renderer.previewObjects = null
+            }
+          } else {
+            renderer.previewTiles = null
+            renderer.previewObjects = null
+          }
+        } else if (tool !== 'paint') {
+          renderer.previewTiles = null
+        }
       } else {
         renderer.hoverCol = -1
         renderer.hoverRow = -1
         setHover(-1, -1)
+        renderer.previewTiles = null
+        renderer.previewObjects = null
       }
+
+      // Object placement preview (holo) — outside grid bounds check since objects are freely placed
+      {
+        const tool = getActiveTool()
+        if (tool === 'object') {
+          const selectedImg = getSelectedObjectImage()
+          if (selectedImg?.imageBitmap) {
+            const world = getWorldCoords(e)
+            renderer.previewObjects = [{
+              imageBitmap: selectedImg.imageBitmap,
+              x: world.wx - selectedImg.width / 2,
+              y: world.wy - selectedImg.height,
+              width: selectedImg.width, height: selectedImg.height
+            }]
+          } else {
+            renderer.previewObjects = null
+          }
+        } else if (tool !== 'stamp') {
+          renderer.previewObjects = null
+        }
+      }
+
       renderer.markDirty()
 
       if (isDrawing && col >= 0 && col < map.config.gridWidth && row >= 0 && row < map.config.gridHeight) {
@@ -1353,6 +1585,7 @@
         return
       }
 
+      // Finish tile selection
       // Finish marquee drag-select
       if (isMarqueeSelecting) {
         isMarqueeSelecting = false
@@ -1510,6 +1743,15 @@
 
       if (e.code === 'Escape' && showCanvasContextMenu) {
         closeCanvasContextMenu()
+        return
+      }
+      // Escape deselects stamp tool
+      if (e.code === 'Escape' && getActiveTool() === 'stamp') {
+        selectPreset(null)
+        setActiveTool('select')
+        renderer.previewTiles = null
+        renderer.previewObjects = null
+        renderer.markDirty()
         return
       }
 
@@ -1783,9 +2025,18 @@
       renderer.markDirty()
     }
 
+    function handlePointerLeave() {
+      renderer.previewTiles = null
+      renderer.previewObjects = null
+      renderer.hoverCol = -1
+      renderer.hoverRow = -1
+      renderer.markDirty()
+    }
+
     canvasEl.addEventListener('pointerdown', handlePointerDown)
     canvasEl.addEventListener('pointermove', handlePointerMove)
     canvasEl.addEventListener('pointerup', handlePointerUp)
+    canvasEl.addEventListener('pointerleave', handlePointerLeave)
     canvasEl.addEventListener('wheel', handleWheel, { passive: false })
     canvasEl.addEventListener('contextmenu', handleContextMenu)
     document.addEventListener('mousedown', handleDocClickForCtxMenu, true)
@@ -1802,6 +2053,7 @@
       renderer.destroy()
       canvasEl.removeEventListener('pointerdown', handlePointerDown)
       canvasEl.removeEventListener('pointermove', handlePointerMove)
+      canvasEl.removeEventListener('pointerleave', handlePointerLeave)
       canvasEl.removeEventListener('pointerup', handlePointerUp)
       canvasEl.removeEventListener('wheel', handleWheel)
       canvasEl.removeEventListener('contextmenu', handleContextMenu)
@@ -1920,6 +2172,32 @@
         </button>
       {/if}
     {/if}
+    <div class="ctx-separator"></div>
+    <button class="ctx-item" onclick={openPresetNameDialogFromObjects}>
+      <span class="ctx-icon">📦</span> Als Preset speichern
+    </button>
+  </div>
+{/if}
+
+{#if showPresetNameDialog}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="fill-confirm-overlay" onkeydown={(e) => { if (e.key === 'Escape') cancelPresetNameDialog(); if (e.key === 'Enter') savePresetFromSelection() }}>
+    <div class="fill-confirm-dialog">
+      <h3>Preset speichern</h3>
+      <p>Name für das Preset:</p>
+      <input
+        bind:this={presetNameInputRef}
+        class="preset-name-input"
+        type="text"
+        bind:value={presetNameValue}
+        placeholder="Preset Name"
+        use:focusOnMount
+      />
+      <div class="fill-confirm-buttons">
+        <button class="cancel-btn" onclick={cancelPresetNameDialog}>Abbrechen</button>
+        <button class="confirm-btn" onclick={savePresetFromSelection}>Speichern</button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -2189,5 +2467,21 @@
     margin-top: 4px;
     white-space: nowrap;
     width: fit-content;
+  }
+
+  .preset-name-input {
+    width: 100%;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+    margin: 8px 0;
+  }
+
+  .preset-name-input:focus {
+    outline: none;
+    border-color: var(--accent);
   }
 </style>

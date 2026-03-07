@@ -16,6 +16,9 @@
     serializeLibrary, deserializeLibrary, clearLibrary
   } from './lib/stores/object-library-store'
   import {
+    serializePresets, deserializePresets, clearPresets
+  } from './lib/stores/preset-store'
+  import {
     getSettings, subscribe as settingsSubscribe
   } from './lib/stores/settings-store'
 
@@ -300,7 +303,8 @@
       })),
       activeLayerId: map.activeLayerId,
       camera: { x: 0, y: 0, zoom: 1 },
-      objectLibrary: serializeLibrary()
+      objectLibrary: serializeLibrary(),
+      presets: serializePresets()
     }, null, 2)
   }
 
@@ -382,6 +386,13 @@
       await deserializeLibrary(project.objectLibrary)
     } else {
       clearLibrary()
+    }
+
+    // Restore presets
+    if (project.presets && Array.isArray(project.presets)) {
+      deserializePresets(project.presets)
+    } else {
+      clearPresets()
     }
 
     setMap({

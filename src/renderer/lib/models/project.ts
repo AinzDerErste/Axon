@@ -2,6 +2,7 @@ import type { MapConfig } from './map'
 import type { Layer } from './layer'
 import type { Tileset } from './tileset'
 import type { SerializedObjectImage } from '../stores/object-library-store'
+import type { Preset } from './preset'
 
 /** On-disk format for .isomapproject files */
 export interface ProjectFile {
@@ -13,4 +14,6 @@ export interface ProjectFile {
   camera: { x: number; y: number; zoom: number }
   /** Object image library (persisted across sessions) */
   objectLibrary?: SerializedObjectImage[]
+  /** Saved presets/prefabs */
+  presets?: Preset[]
 }

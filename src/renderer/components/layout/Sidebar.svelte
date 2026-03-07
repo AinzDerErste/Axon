@@ -2,6 +2,7 @@
   import LayerPanel from '../panels/LayerPanel.svelte'
   import TilePalette from '../panels/TilePalette.svelte'
   import ObjectPanel from '../panels/ObjectPanel.svelte'
+  import PresetsPanel from '../panels/PresetsPanel.svelte'
   import PropertiesPanel from '../panels/PropertiesPanel.svelte'
 
   interface Props {
@@ -15,6 +16,7 @@
   <LayerPanel />
   <TilePalette />
   <ObjectPanel />
+  <PresetsPanel />
   <PropertiesPanel />
 </div>
 

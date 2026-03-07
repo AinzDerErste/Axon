@@ -1,4 +1,4 @@
-export type ToolType = 'paint' | 'eraser' | 'fill' | 'select' | 'object' | 'zone' | 'collision' | 'sketch'
+export type ToolType = 'paint' | 'eraser' | 'fill' | 'select' | 'object' | 'zone' | 'collision' | 'sketch' | 'stamp'
 
 let activeTool: ToolType = 'paint'
 let listeners: Array<() => void> = []

@@ -1,5 +1,6 @@
 import type { MapData } from '../models/map'
 import type { Layer, TileLayer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone } from '../models/layer'
+import type { TileRef } from '../models/tile'
 import { Camera } from './camera'
 import { drawGrid } from './grid-renderer'
 import { mapToScreen } from './iso-math'
@@ -15,6 +16,18 @@ export function getNextZoneColor(): string {
   const color = ZONE_COLORS[nextZoneColorIdx % ZONE_COLORS.length]
   nextZoneColorIdx++
   return color
+}
+
+/** Lightweight object descriptor for holo preview rendering */
+export interface PreviewObject {
+  imageBitmap: ImageBitmap
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation?: number
+  flipX?: boolean
+  flipY?: boolean
 }
 
 export class MapRenderer {
@@ -43,6 +56,12 @@ export class MapRenderer {
   zoneMousePos: { x: number; y: number } | null = null
   /** Marquee drag-select rectangle in world space (null = not active) */
   marqueeRect: { x: number; y: number; w: number; h: number } | null = null
+
+  /** Preview tiles shown as semi-transparent holo overlay (paint preview / stamp preview) */
+  previewTiles: { col: number; row: number; tileRef: TileRef }[] | null = null
+
+  /** Preview objects shown as semi-transparent holo overlay (object tool / stamp preview) */
+  previewObjects: PreviewObject[] | null = null
 
   /** Sketch tool preview state */
   activeSketchPoints: { x: number; y: number }[] = []
@@ -123,6 +142,16 @@ export class MapRenderer {
     }
     ctx.globalAlpha = 1.0
 
+    // Draw tile preview holo overlay
+    if (this.previewTiles && this.previewTiles.length > 0) {
+      this.drawPreviewTiles(ctx)
+    }
+
+    // Draw object preview holo overlay
+    if (this.previewObjects && this.previewObjects.length > 0) {
+      this.drawPreviewObjects(ctx)
+    }
+
     // Draw active zone being drawn
     if (this.activeZonePoints.length > 0) {
       this.drawActiveZone(ctx)
@@ -149,6 +178,63 @@ export class MapRenderer {
       ctx.fillRect(x, y, w, h)
       ctx.strokeRect(x, y, w, h)
       ctx.setLineDash([])
+    }
+
+    ctx.restore()
+  }
+
+  private drawPreviewTiles(ctx: CanvasRenderingContext2D): void {
+    if (!this.map || !this.previewTiles) return
+    const { config, tilesets } = this.map
+
+    ctx.save()
+    ctx.globalAlpha = 0.5
+
+    for (const { col, row, tileRef } of this.previewTiles) {
+      const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
+      if (!tileset?.imageBitmap) continue
+
+      const tileEntry = tileset.tiles[tileRef.tileIndex]
+      if (!tileEntry) continue
+
+      const screen = mapToScreen(col, row, config.tileWidth, config.tileHeight, config.orientation || 'diamond')
+
+      ctx.drawImage(
+        tileset.imageBitmap,
+        tileEntry.x, tileEntry.y,
+        tileEntry.width, tileEntry.height,
+        screen.x - tileEntry.width / 2,
+        screen.y + config.tileHeight - tileEntry.height,
+        tileEntry.width, tileEntry.height
+      )
+    }
+
+    ctx.restore()
+  }
+
+  private drawPreviewObjects(ctx: CanvasRenderingContext2D): void {
+    if (!this.previewObjects) return
+
+    ctx.save()
+    ctx.globalAlpha = 0.5
+
+    for (const obj of this.previewObjects) {
+      const rot = (obj.rotation || 0) * Math.PI / 180
+      const hasRotation = rot !== 0
+      const hasFlip = obj.flipX || obj.flipY
+
+      if (hasRotation || hasFlip) {
+        ctx.save()
+        const cx = obj.x + obj.width / 2
+        const cy = obj.y + obj.height / 2
+        ctx.translate(cx, cy)
+        if (hasRotation) ctx.rotate(rot)
+        if (hasFlip) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
+        ctx.drawImage(obj.imageBitmap, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
+        ctx.restore()
+      } else {
+        ctx.drawImage(obj.imageBitmap, obj.x, obj.y, obj.width, obj.height)
+      }
     }
 
     ctx.restore()
