@@ -8,7 +8,7 @@
     subscribe as mapSubscribe
   } from '../../lib/stores/map-store'
   import {
-    getSelection, selectObject, selectZone, selectImageLayer, clearSelection,
+    getSelection, selectObject, selectZone, selectPath, selectImageLayer, clearSelection,
     toggleObjectSelection, isObjectSelected, getSelectedObjectIds,
     subscribe as selSubscribe,
     type SelectionTarget
@@ -16,6 +16,7 @@
   import { executeCommand } from '../../lib/stores/history-store'
   import { DeleteObjectCommand, ReorderObjectCommand } from '../../lib/commands/object-command'
   import { DeleteZoneCommand, ReorderZoneCommand } from '../../lib/commands/zone-command'
+  import { DeletePathCommand, ReorderPathCommand } from '../../lib/commands/path-command'
   import type { Layer, ObjectLayer, DrawingLayer, ObjectGroup } from '../../lib/models/layer'
 
   let layers = $state<Layer[]>([])
@@ -185,6 +186,34 @@
     }
   }
 
+  function handleSelectPath(layerId: string, pathId: string, e: MouseEvent) {
+    e.stopPropagation()
+    setActiveLayer(layerId)
+    selectPath(layerId, pathId)
+  }
+
+  function handleDeletePath(layerId: string, pathId: string, e: MouseEvent) {
+    e.stopPropagation()
+    const map = getMap()
+    if (!map) return
+    const layer = map.layers.find(l => l.id === layerId)
+    if (!layer || layer.type !== 'object') return
+    const path = layer.paths.find(p => p.id === pathId)
+    if (path) {
+      const cmd = new DeletePathCommand(layerId, path)
+      executeCommand(cmd)
+      if (selectionTarget?.type === 'path' && selectionTarget.pathId === pathId) {
+        clearSelection()
+      }
+    }
+  }
+
+  function handleReorderPath(layerId: string, pathId: string, dir: 'up' | 'down', e: MouseEvent) {
+    e.stopPropagation()
+    const cmd = new ReorderPathCommand(layerId, pathId, dir)
+    executeCommand(cmd)
+  }
+
   /** Check if a layer (or its children) matches the search query */
   function layerMatchesSearch(layer: Layer, q: string): boolean {
     if (layer.name.toLowerCase().includes(q)) return true
@@ -192,6 +221,7 @@
       const objLayer = layer as ObjectLayer
       if (objLayer.objects.some(o => o.name.toLowerCase().includes(q))) return true
       if (objLayer.zones.some(z => z.name.toLowerCase().includes(q))) return true
+      if (objLayer.paths.some(p => p.name.toLowerCase().includes(q))) return true
     }
     if (layer.type === 'drawing') {
       if (layer.objects.some(o => o.name.toLowerCase().includes(q))) return true
@@ -531,9 +561,10 @@
           {@const groups = objLayer.groups || []}
           {@const filteredObjects = q ? objLayer.objects.filter(o => o.name.toLowerCase().includes(q)) : objLayer.objects}
           {@const filteredZones = q ? objLayer.zones.filter(z => z.name.toLowerCase().includes(q)) : objLayer.zones}
+          {@const filteredPaths = q ? objLayer.paths.filter(p => p.name.toLowerCase().includes(q)) : (objLayer.paths || [])}
           {@const ungroupedObjects = filteredObjects.filter(o => !o.groupId || !groups.some(g => g.id === o.groupId))}
 
-          {#if filteredObjects.length === 0 && filteredZones.length === 0 && groups.length === 0 && !q}
+          {#if filteredObjects.length === 0 && filteredZones.length === 0 && filteredPaths.length === 0 && groups.length === 0 && !q}
             <div class="sub-item-empty">No items</div>
           {/if}
 
@@ -702,6 +733,31 @@
               <button class="sub-item-order" title="Move forward (up)" onclick={(e: MouseEvent) => handleReorderZone(layer.id, zone.id, 'up', e)}>↑</button>
               <button class="sub-item-order" title="Move backward (down)" onclick={(e: MouseEvent) => handleReorderZone(layer.id, zone.id, 'down', e)}>↓</button>
               <button class="sub-item-delete" title="Delete zone" onclick={(e: MouseEvent) => handleDeleteZone(layer.id, zone.id, e)}>×</button>
+            </div>
+          {/each}
+
+          <!-- Paths -->
+          {#each filteredPaths as path (path.id)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              class="sub-item"
+              class:selected={selectionTarget?.type === 'path' && selectionTarget.pathId === path.id}
+              class:search-match={!!q}
+              onclick={(e: MouseEvent) => handleSelectPath(layer.id, path.id, e)}
+              role="button"
+              tabindex="0"
+            >
+              <svg class="zone-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={path.color} stroke-width="2">
+                <circle cx="4" cy="4" r="2" fill={path.color}/>
+                <circle cx="12" cy="12" r="2" fill={path.color}/>
+                <circle cx="20" cy="20" r="2" fill={path.color}/>
+                <line x1="6" y1="6" x2="10" y2="10"/>
+                <line x1="14" y1="14" x2="18" y2="18"/>
+              </svg>
+              <span class="sub-item-name">{path.name}</span>
+              <button class="sub-item-order" title="Move forward (up)" onclick={(e: MouseEvent) => handleReorderPath(layer.id, path.id, 'up', e)}>↑</button>
+              <button class="sub-item-order" title="Move backward (down)" onclick={(e: MouseEvent) => handleReorderPath(layer.id, path.id, 'down', e)}>↓</button>
+              <button class="sub-item-delete" title="Delete path" onclick={(e: MouseEvent) => handleDeletePath(layer.id, path.id, e)}>×</button>
             </div>
           {/each}
         {/if}

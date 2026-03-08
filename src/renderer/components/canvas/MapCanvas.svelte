@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { MapRenderer, getNextZoneColor, type PreviewObject } from '../../lib/engine/renderer'
+  import { MapRenderer, getNextZoneColor, getNextPathColor, type PreviewObject } from '../../lib/engine/renderer'
   import { screenToMap, snapToTileCorner } from '../../lib/engine/iso-math'
   import {
     getMap, setActiveLayer, updateImageLayer, updateObject,
@@ -16,10 +16,11 @@
   import { getSettings } from '../../lib/stores/settings-store'
   import { PlaceObjectCommand, MoveObjectCommand, DeleteObjectCommand, ReorderObjectCommand, BatchCommand } from '../../lib/commands/object-command'
   import { AddZoneCommand, DeleteZoneCommand } from '../../lib/commands/zone-command'
+  import { AddPathCommand, DeletePathCommand } from '../../lib/commands/path-command'
   import { getSelectedTile } from '../../lib/stores/tile-selection-store'
   import { getSelectedObjectImage, subscribe as objSelSubscribe } from '../../lib/stores/object-selection-store'
   import {
-    getSelection, selectObject, selectZone, selectImageLayer, clearSelection,
+    getSelection, selectObject, selectZone, selectPath, selectImageLayer, clearSelection,
     toggleObjectSelection, getSelectedObjectIds, isObjectSelected, selectObjects,
     subscribe as selSubscribe
   } from '../../lib/stores/selection-store'
@@ -81,6 +82,22 @@
     pendingFillParams = null
     showFillConfirm = false
     pendingFillCount = 0
+  }
+
+  function commitPath(layer: import('../../lib/models/layer').ObjectLayer, points: { x: number; y: number }[], loop: boolean) {
+    const path = {
+      id: crypto.randomUUID(),
+      name: `Path ${layer.paths.length + 1}`,
+      color: renderer.activePathColor,
+      points,
+      loop
+    }
+    const cmd = new AddPathCommand(layer.id, path)
+    executeCommand(cmd)
+    renderer.activePathPoints = []
+    renderer.pathMousePos = null
+    renderer.activePathColor = getNextPathColor()
+    renderer.markDirty()
   }
 
   // Object clipboard for copy/paste/duplicate
@@ -547,6 +564,7 @@
           ? new Set(sel.objectIds)
           : new Set()
       renderer.selectedZoneId = sel?.type === 'zone' ? sel.zoneId : null
+      renderer.selectedPathId = sel?.type === 'path' ? sel.pathId : null
       renderer.selectedImageLayerId = sel?.type === 'image-layer' ? sel.layerId : null
       renderer.markDirty()
     })
@@ -755,6 +773,14 @@
           return
         }
 
+        const hitPath = renderer.hitTestPath(world.wx, world.wy)
+        if (hitPath) {
+          selectPath(hitPath.layerId, hitPath.path.id)
+          setActiveLayer(hitPath.layerId)
+          renderer.markDirty()
+          return
+        }
+
         // Nothing hit → start marquee drag-select
         clearSelection()
         isMarqueeSelecting = true
@@ -837,6 +863,14 @@
         if (hitZone) {
           selectZone(hitZone.layerId, hitZone.zone.id)
           setActiveLayer(hitZone.layerId)
+          renderer.markDirty()
+          return
+        }
+
+        const hitPath2 = renderer.hitTestPath(world.wx, world.wy)
+        if (hitPath2) {
+          selectPath(hitPath2.layerId, hitPath2.path.id)
+          setActiveLayer(hitPath2.layerId)
           renderer.markDirty()
           return
         }
@@ -928,6 +962,28 @@
             renderer.zoneMousePos = null
             if (!isCollision) renderer.activeZoneColor = getNextZoneColor()
             renderer.markDirty()
+            return
+          }
+        }
+
+        pts.push({ x: world.x, y: world.y })
+        renderer.markDirty()
+        return
+      }
+
+      // Path tool: add waypoint to active path
+      if (tool === 'path') {
+        if (activeLayer.type !== 'object') return
+        const world = getZoneWorldCoords(e)
+        const pts = renderer.activePathPoints
+
+        // Check if clicking near first point to close as loop
+        if (pts.length >= 3) {
+          const dx = world.x - pts[0].x
+          const dy = world.y - pts[0].y
+          const closeThreshold = 15 / renderer.camera.zoom
+          if (Math.sqrt(dx * dx + dy * dy) < closeThreshold) {
+            commitPath(activeLayer, [...pts], true)
             return
           }
         }
@@ -1461,6 +1517,13 @@
         renderer.markDirty()
       }
 
+      // Update path preview mouse position
+      if (getActiveTool() === 'path' && renderer.activePathPoints.length > 0) {
+        const world = getZoneWorldCoords(e)
+        renderer.pathMousePos = { x: world.x, y: world.y }
+        renderer.markDirty()
+      }
+
       // Suppress grid hover on drawing layers (no crosshair / grid highlight)
       if (isDrawingLayerActive) {
         renderer.hoverCol = -1
@@ -1771,6 +1834,32 @@
         }
       }
 
+      // Path drawing: undo last point with Ctrl+Z, Backspace, or Delete
+      if (renderer.activePathPoints.length > 0) {
+        if ((e.ctrlKey && e.code === 'KeyZ') || e.code === 'Backspace' || e.code === 'Delete') {
+          e.preventDefault()
+          e.stopPropagation()
+          renderer.activePathPoints.pop()
+          if (renderer.activePathPoints.length === 0) {
+            renderer.pathMousePos = null
+          }
+          renderer.markDirty()
+          return
+        }
+        // Enter: commit open path (≥2 points)
+        if (e.code === 'Enter' && renderer.activePathPoints.length >= 2) {
+          e.preventDefault()
+          const map = getMap()
+          if (map) {
+            const activeLayer = map.layers.find(l => l.id === map.activeLayerId)
+            if (activeLayer && activeLayer.type === 'object') {
+              commitPath(activeLayer, [...renderer.activePathPoints], false)
+            }
+          }
+          return
+        }
+      }
+
       // Escape cancels text input
       if (e.code === 'Escape' && showTextInput) {
         showTextInput = false
@@ -1795,6 +1884,14 @@
         renderer.activeZonePoints = []
         renderer.zoneMousePos = null
         renderer.markDirty()
+      }
+
+      // Escape cancels active path drawing
+      if (e.code === 'Escape' && renderer.activePathPoints.length > 0) {
+        renderer.activePathPoints = []
+        renderer.pathMousePos = null
+        renderer.markDirty()
+        return
       }
 
       // Copy selected object(s)
@@ -1994,6 +2091,16 @@
             executeCommand(cmd)
             clearSelection()
             renderer.markDirty()
+          }
+        } else if (sel.type === 'path') {
+          if (layer.type === 'object') {
+            const path = layer.paths.find(p => p.id === sel.pathId)
+            if (path) {
+              const cmd = new DeletePathCommand(sel.layerId, path)
+              executeCommand(cmd)
+              clearSelection()
+              renderer.markDirty()
+            }
           }
         }
       }

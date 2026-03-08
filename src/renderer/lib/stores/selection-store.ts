@@ -7,6 +7,7 @@ export type SelectionTarget =
   | { type: 'object'; layerId: string; objectId: string }
   | { type: 'objects'; layerId: string; objectIds: string[] }
   | { type: 'zone'; layerId: string; zoneId: string }
+  | { type: 'path'; layerId: string; pathId: string }
   | { type: 'image-layer'; layerId: string }
   | null
 
@@ -100,6 +101,11 @@ export function getSelectedObjectIds(): string[] {
 
 export function selectZone(layerId: string, zoneId: string): void {
   current = { type: 'zone', layerId, zoneId }
+  notify()
+}
+
+export function selectPath(layerId: string, pathId: string): void {
+  current = { type: 'path', layerId, pathId }
   notify()
 }
 

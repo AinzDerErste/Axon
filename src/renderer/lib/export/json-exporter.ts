@@ -28,6 +28,10 @@ export function exportMapAsJson(map: MapData): string {
           })),
           zones: l.zones.map(z => ({
             name: z.name, color: z.color, points: z.points, closed: z.closed
+          })),
+          paths: (l.paths || []).map(p => ({
+            name: p.name, color: p.color, points: p.points, loop: p.loop,
+            assignedObjectId: p.assignedObjectId || undefined
           }))
         }
       }

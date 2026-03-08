@@ -17,7 +17,9 @@ const defaultBindings: KeyBinding[] = [
   { id: 'tool.object', label: 'Object', category: 'Tools', key: 'o', defaultKey: 'o' },
   { id: 'tool.zone', label: 'Zone', category: 'Tools', key: 'z', defaultKey: 'z' },
   { id: 'tool.collision', label: 'Collision', category: 'Tools', key: 'c', defaultKey: 'c' },
+  { id: 'tool.path', label: 'Path', category: 'Tools', key: 'h', defaultKey: 'h' },
   { id: 'tool.sketch', label: 'Sketch', category: 'Tools', key: 'k', defaultKey: 'k' },
+  { id: 'tool.stamp', label: 'Stamp', category: 'Tools', key: 't', defaultKey: 't' },
   // Canvas
   { id: 'canvas.copy', label: 'Copy', category: 'Canvas', key: 'ctrl+c', defaultKey: 'ctrl+c' },
   { id: 'canvas.paste', label: 'Paste', category: 'Canvas', key: 'ctrl+v', defaultKey: 'ctrl+v' },

@@ -6,16 +6,18 @@
     type SelectionTarget
   } from '../../lib/stores/selection-store'
   import {
-    getMap, updateObject, updateZone, updateImageLayer,
+    getMap, updateObject, updateZone, updatePath, updateImageLayer,
     subscribe as mapSubscribe
   } from '../../lib/stores/map-store'
-  import type { MapObject, Zone, ImageLayer, ObjectLayer } from '../../lib/models/layer'
+  import type { MapObject, Zone, Path, ImageLayer, ObjectLayer } from '../../lib/models/layer'
 
   let selection = $state<SelectionTarget>(null)
   let selectedObject = $state<MapObject | null>(null)
   let selectedZone = $state<Zone | null>(null)
+  let selectedPath = $state<Path | null>(null)
   let selectedImageLayer = $state<ImageLayer | null>(null)
   let multiSelectedObjects = $state<MapObject[]>([])
+  let layerObjects = $state<MapObject[]>([])
 
   function refresh() {
     selection = getSelection()
@@ -23,48 +25,66 @@
     if (!map || !selection) {
       selectedObject = null
       selectedZone = null
+      selectedPath = null
       selectedImageLayer = null
       multiSelectedObjects = []
+      layerObjects = []
       return
     }
     const layer = map.layers.find(l => l.id === selection!.layerId)
     if (!layer) {
       selectedObject = null
       selectedZone = null
+      selectedPath = null
       selectedImageLayer = null
       multiSelectedObjects = []
+      layerObjects = []
       return
     }
     if (selection.type === 'image-layer' && layer.type === 'image') {
       selectedImageLayer = layer
       selectedObject = null
       selectedZone = null
+      selectedPath = null
       multiSelectedObjects = []
+      layerObjects = []
       return
     }
     selectedImageLayer = null
     if (layer.type !== 'object' && layer.type !== 'drawing') {
       selectedObject = null
       selectedZone = null
+      selectedPath = null
       multiSelectedObjects = []
+      layerObjects = []
       return
     }
+    layerObjects = layer.objects
     if (selection.type === 'object') {
       selectedObject = layer.objects.find(o => o.id === (selection as { type: 'object'; objectId: string }).objectId) ?? null
       selectedZone = null
+      selectedPath = null
       multiSelectedObjects = []
     } else if (selection.type === 'objects') {
       const ids = (selection as { type: 'objects'; objectIds: string[] }).objectIds
       multiSelectedObjects = layer.objects.filter(o => ids.includes(o.id))
       selectedObject = null
       selectedZone = null
+      selectedPath = null
     } else if (selection.type === 'zone' && layer.type === 'object') {
       selectedZone = layer.zones.find(z => z.id === (selection as { type: 'zone'; zoneId: string }).zoneId) ?? null
       selectedObject = null
+      selectedPath = null
+      multiSelectedObjects = []
+    } else if (selection.type === 'path' && layer.type === 'object') {
+      selectedPath = layer.paths.find(p => p.id === (selection as { type: 'path'; pathId: string }).pathId) ?? null
+      selectedObject = null
+      selectedZone = null
       multiSelectedObjects = []
     } else {
       selectedObject = null
       selectedZone = null
+      selectedPath = null
       multiSelectedObjects = []
     }
   }
@@ -152,6 +172,28 @@
   function handleZoneClosedChange(e: Event) {
     if (!selection || selection.type !== 'zone') return
     updateZone(selection.layerId, selection.zoneId, { closed: (e.target as HTMLInputElement).checked })
+  }
+
+  // Path property handlers
+  function handlePathNameChange(e: Event) {
+    if (!selection || selection.type !== 'path') return
+    updatePath(selection.layerId, selection.pathId, { name: (e.target as HTMLInputElement).value })
+  }
+
+  function handlePathColorChange(e: Event) {
+    if (!selection || selection.type !== 'path') return
+    updatePath(selection.layerId, selection.pathId, { color: (e.target as HTMLInputElement).value })
+  }
+
+  function handlePathLoopChange(e: Event) {
+    if (!selection || selection.type !== 'path') return
+    updatePath(selection.layerId, selection.pathId, { loop: (e.target as HTMLInputElement).checked })
+  }
+
+  function handlePathAssignedObjectChange(e: Event) {
+    if (!selection || selection.type !== 'path') return
+    const val = (e.target as HTMLSelectElement).value
+    updatePath(selection.layerId, selection.pathId, { assignedObjectId: val || undefined })
   }
 
   // Image layer property handlers
@@ -323,6 +365,10 @@
       for (const p of selectedZone.points) { wx += p.x; wy += p.y }
       wx /= selectedZone.points.length
       wy /= selectedZone.points.length
+    } else if (selectedPath && selectedPath.points.length > 0) {
+      for (const p of selectedPath.points) { wx += p.x; wy += p.y }
+      wx /= selectedPath.points.length
+      wy /= selectedPath.points.length
     } else if (selectedImageLayer) {
       wx = selectedImageLayer.x + selectedImageLayer.width / 2
       wy = selectedImageLayer.y + selectedImageLayer.height / 2
@@ -381,7 +427,7 @@
       </div>
     </div>
   </div>
-{:else if selectedObject || selectedZone || selectedImageLayer}
+{:else if selectedObject || selectedZone || selectedPath || selectedImageLayer}
   <div class="panel">
     <div class="panel-header">
       <span class="panel-title">Properties</span>
@@ -426,7 +472,7 @@
           </button>
         {/if}
         <span class="prop-type-badge">
-          {#if selectedObject}Object{:else if selectedZone}Zone{:else}Image{/if}
+          {#if selectedObject}Object{:else if selectedZone}Zone{:else if selectedPath}Path{:else}Image{/if}
         </span>
       </div>
     </div>
@@ -569,6 +615,42 @@
         <div class="prop-group">
           <label class="prop-label">Vertices</label>
           <span class="prop-value">{selectedZone.points.length}</span>
+        </div>
+      {/if}
+
+      {#if selectedPath}
+        <div class="prop-group">
+          <label class="prop-label">Name</label>
+          <input class="prop-input" type="text" value={selectedPath.name}
+            onchange={handlePathNameChange} />
+        </div>
+        <div class="prop-group">
+          <label class="prop-label">Color</label>
+          <div class="color-input-row">
+            <input type="color" value={selectedPath.color}
+              onchange={handlePathColorChange} class="color-picker" />
+            <span class="color-value">{selectedPath.color}</span>
+          </div>
+        </div>
+        <div class="prop-group">
+          <label class="prop-checkbox">
+            <input type="checkbox" checked={selectedPath.loop}
+              onchange={handlePathLoopChange} />
+            Loop
+          </label>
+        </div>
+        <div class="prop-group">
+          <label class="prop-label">Waypoints</label>
+          <span class="prop-value">{selectedPath.points.length}</span>
+        </div>
+        <div class="prop-group">
+          <label class="prop-label">Assigned Object</label>
+          <select class="prop-input" value={selectedPath.assignedObjectId || ''} onchange={handlePathAssignedObjectChange}>
+            <option value="">None</option>
+            {#each layerObjects as obj}
+              <option value={obj.id}>{obj.name}</option>
+            {/each}
+          </select>
         </div>
       {/if}
     </div>

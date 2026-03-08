@@ -47,6 +47,19 @@ export interface Zone {
   zoneType?: 'zone' | 'collision'
 }
 
+/** A waypoint path for patrol routes or movement paths */
+export interface Path {
+  id: string
+  name: string
+  color: string
+  /** Waypoints in world coordinates (order defines direction) */
+  points: { x: number; y: number }[]
+  /** Whether the path loops back to the first point */
+  loop: boolean
+  /** ID of the MapObject that follows this path */
+  assignedObjectId?: string
+}
+
 export interface TileLayer {
   type: 'tile'
   id: string
@@ -65,6 +78,7 @@ export interface ObjectLayer {
   opacity: number
   objects: MapObject[]
   zones: Zone[]
+  paths: Path[]
   /** Object draw order: 'auto' = isometric depth sort, 'manual' = array order */
   sortMode?: 'auto' | 'manual'
   /** Organizational groups for objects */
@@ -117,7 +131,7 @@ export function createLayer(id: string, name: string, rows: number, cols: number
 }
 
 export function createObjectLayer(id: string, name: string): ObjectLayer {
-  return { type: 'object', id, name, visible: true, opacity: 1.0, objects: [], zones: [] }
+  return { type: 'object', id, name, visible: true, opacity: 1.0, objects: [], zones: [], paths: [] }
 }
 
 export function createDrawingLayer(id: string, name: string): DrawingLayer {

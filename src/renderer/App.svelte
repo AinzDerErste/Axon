@@ -261,6 +261,11 @@
               id: z.id, name: z.name, color: z.color,
               points: z.points, closed: z.closed,
               zoneType: z.zoneType || 'zone'
+            })),
+            paths: (l.paths || []).map(p => ({
+              id: p.id, name: p.name, color: p.color,
+              points: p.points, loop: p.loop,
+              assignedObjectId: p.assignedObjectId || undefined
             }))
           }
         }
@@ -331,6 +336,7 @@
       if (!layer.type) layer.type = 'tile' // Backward compat
       if (layer.type === 'object') {
         if (!layer.zones) layer.zones = []
+        if (!layer.paths) layer.paths = []
         if (!layer.groups) layer.groups = []
         // Backward compat: default zoneType to 'zone'
         for (const zone of layer.zones) {

@@ -1,5 +1,5 @@
 import type { MapData } from '../models/map'
-import type { Layer, TileLayer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone } from '../models/layer'
+import type { Layer, TileLayer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone, Path } from '../models/layer'
 import type { TileRef } from '../models/tile'
 import { Camera } from './camera'
 import { drawGrid } from './grid-renderer'
@@ -15,6 +15,18 @@ let nextZoneColorIdx = 0
 export function getNextZoneColor(): string {
   const color = ZONE_COLORS[nextZoneColorIdx % ZONE_COLORS.length]
   nextZoneColorIdx++
+  return color
+}
+
+/** Path colors for new paths (teal/green tones, distinct from zones) */
+const PATH_COLORS = [
+  '#94e2d5', '#a6e3a1', '#89dceb', '#f9e2af',
+  '#cba6f7', '#fab387', '#f38ba8', '#89b4fa'
+]
+let nextPathColorIdx = 0
+export function getNextPathColor(): string {
+  const color = PATH_COLORS[nextPathColorIdx % PATH_COLORS.length]
+  nextPathColorIdx++
   return color
 }
 
@@ -54,6 +66,14 @@ export class MapRenderer {
   activeZoneColor: string = '#f38ba8'
   /** Current mouse position in world space for zone preview line */
   zoneMousePos: { x: number; y: number } | null = null
+  /** Currently selected path ID (for highlighting) */
+  selectedPathId: string | null = null
+  /** Active path being drawn (not yet committed) */
+  activePathPoints: { x: number; y: number }[] = []
+  activePathColor: string = '#94e2d5'
+  /** Current mouse position in world space for path preview line */
+  pathMousePos: { x: number; y: number } | null = null
+
   /** Marquee drag-select rectangle in world space (null = not active) */
   marqueeRect: { x: number; y: number; w: number; h: number } | null = null
 
@@ -155,6 +175,11 @@ export class MapRenderer {
     // Draw active zone being drawn
     if (this.activeZonePoints.length > 0) {
       this.drawActiveZone(ctx)
+    }
+
+    // Draw active path being drawn
+    if (this.activePathPoints.length > 0) {
+      this.drawActivePath(ctx)
     }
 
     // Draw sketch preview
@@ -285,6 +310,11 @@ export class MapRenderer {
     // Draw zones first (below objects)
     for (const zone of layer.zones) {
       this.drawZone(ctx, zone)
+    }
+
+    // Draw paths (below objects, above zones)
+    for (const path of (layer.paths || [])) {
+      this.drawPath(ctx, layer, path)
     }
 
     // Determine draw order based on layer sort mode
@@ -685,6 +715,245 @@ export class MapRenderer {
       ctx.arc(mouse.x, mouse.y, 4, 0, Math.PI * 2)
       ctx.stroke()
     }
+  }
+
+  private drawPath(ctx: CanvasRenderingContext2D, layer: ObjectLayer, path: Path): void {
+    if (path.points.length < 1) return
+
+    // Draw segments
+    if (path.points.length >= 2) {
+      ctx.beginPath()
+      ctx.moveTo(path.points[0].x, path.points[0].y)
+      for (let i = 1; i < path.points.length; i++) {
+        ctx.lineTo(path.points[i].x, path.points[i].y)
+      }
+      if (path.loop) ctx.closePath()
+      ctx.strokeStyle = path.color
+      ctx.lineWidth = 2.5
+      ctx.stroke()
+
+      // Directional arrowheads at segment midpoints
+      const segCount = path.loop ? path.points.length : path.points.length - 1
+      for (let i = 0; i < segCount; i++) {
+        const a = path.points[i]
+        const b = path.points[(i + 1) % path.points.length]
+        const mx = (a.x + b.x) / 2
+        const my = (a.y + b.y) / 2
+        const angle = Math.atan2(b.y - a.y, b.x - a.x)
+        const headLen = Math.max(6, 8 / this.camera.zoom)
+
+        ctx.beginPath()
+        ctx.moveTo(mx, my)
+        ctx.lineTo(mx - headLen * Math.cos(angle - Math.PI / 6), my - headLen * Math.sin(angle - Math.PI / 6))
+        ctx.moveTo(mx, my)
+        ctx.lineTo(mx - headLen * Math.cos(angle + Math.PI / 6), my - headLen * Math.sin(angle + Math.PI / 6))
+        ctx.strokeStyle = path.color
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+    }
+
+    // Numbered waypoint circles
+    const radius = Math.max(6, 8 / this.camera.zoom)
+    const fontSize = Math.max(8, 10 / this.camera.zoom)
+    ctx.font = `bold ${fontSize}px -apple-system, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    for (let i = 0; i < path.points.length; i++) {
+      const p = path.points[i]
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+      ctx.fillStyle = path.color
+      ctx.fill()
+      ctx.fillStyle = '#1e1e2e'
+      ctx.fillText(`${i + 1}`, p.x, p.y)
+    }
+
+    // Connector to assigned object
+    if (path.assignedObjectId) {
+      const obj = layer.objects.find(o => o.id === path.assignedObjectId)
+      if (obj && path.points.length > 0) {
+        const start = path.points[0]
+        const objCx = obj.x + obj.width / 2
+        const objCy = obj.y + obj.height / 2
+        ctx.beginPath()
+        ctx.moveTo(start.x, start.y)
+        ctx.lineTo(objCx, objCy)
+        ctx.strokeStyle = path.color + '55'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 4])
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+    }
+
+    // Path label at centroid
+    if (path.name && path.points.length >= 2) {
+      let cx = 0, cy = 0
+      for (const p of path.points) { cx += p.x; cy += p.y }
+      cx /= path.points.length
+      cy /= path.points.length
+      ctx.font = '12px -apple-system, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillStyle = path.color
+      ctx.fillText(path.name, cx, cy - radius - 4)
+    }
+
+    // Selection highlight
+    if (path.id === this.selectedPathId) {
+      if (path.points.length >= 2) {
+        ctx.beginPath()
+        ctx.moveTo(path.points[0].x, path.points[0].y)
+        for (let i = 1; i < path.points.length; i++) {
+          ctx.lineTo(path.points[i].x, path.points[i].y)
+        }
+        if (path.loop) ctx.closePath()
+        ctx.strokeStyle = '#89b4fa'
+        ctx.lineWidth = 3
+        ctx.setLineDash([6, 3])
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+      ctx.fillStyle = '#89b4fa'
+      for (const p of path.points) {
+        ctx.fillRect(p.x - 5, p.y - 5, 10, 10)
+      }
+    }
+  }
+
+  private drawActivePath(ctx: CanvasRenderingContext2D): void {
+    const pts = this.activePathPoints
+    if (pts.length === 0) return
+    const mouse = this.pathMousePos
+
+    // Draw placed segments
+    if (pts.length >= 2) {
+      ctx.beginPath()
+      ctx.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y)
+      }
+      ctx.strokeStyle = this.activePathColor
+      ctx.lineWidth = 2.5
+      ctx.stroke()
+
+      // Directional arrowheads
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i]
+        const b = pts[i + 1]
+        const mx = (a.x + b.x) / 2
+        const my = (a.y + b.y) / 2
+        const angle = Math.atan2(b.y - a.y, b.x - a.x)
+        const headLen = Math.max(6, 8 / this.camera.zoom)
+
+        ctx.beginPath()
+        ctx.moveTo(mx, my)
+        ctx.lineTo(mx - headLen * Math.cos(angle - Math.PI / 6), my - headLen * Math.sin(angle - Math.PI / 6))
+        ctx.moveTo(mx, my)
+        ctx.lineTo(mx - headLen * Math.cos(angle + Math.PI / 6), my - headLen * Math.sin(angle + Math.PI / 6))
+        ctx.strokeStyle = this.activePathColor
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+    }
+
+    // Dashed preview line from last point to mouse
+    if (mouse) {
+      const last = pts[pts.length - 1]
+      ctx.beginPath()
+      ctx.moveTo(last.x, last.y)
+      ctx.lineTo(mouse.x, mouse.y)
+      ctx.strokeStyle = this.activePathColor
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 4])
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Loop close preview
+      if (pts.length >= 3) {
+        const dx = mouse.x - pts[0].x
+        const dy = mouse.y - pts[0].y
+        if (Math.sqrt(dx * dx + dy * dy) < 15 / this.camera.zoom) {
+          ctx.beginPath()
+          ctx.moveTo(mouse.x, mouse.y)
+          ctx.lineTo(pts[0].x, pts[0].y)
+          ctx.strokeStyle = this.activePathColor + '88'
+          ctx.lineWidth = 1.5
+          ctx.setLineDash([6, 4])
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
+      }
+    }
+
+    // Numbered waypoint circles
+    const radius = 6
+    ctx.font = 'bold 10px -apple-system, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+      ctx.fillStyle = this.activePathColor
+      ctx.fill()
+      ctx.fillStyle = '#1e1e2e'
+      ctx.fillText(`${i + 1}`, p.x, p.y)
+
+      // White ring on first point (loop close target)
+      if (i === 0 && pts.length >= 3) {
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+    }
+
+    // Mouse snap indicator
+    if (mouse) {
+      ctx.strokeStyle = this.activePathColor
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.arc(mouse.x, mouse.y, 4, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+  }
+
+  hitTestPath(worldX: number, worldY: number): { path: Path; layerId: string } | null {
+    if (!this.map) return null
+    const threshold = 10 / this.camera.zoom
+    for (let i = this.map.layers.length - 1; i >= 0; i--) {
+      const layer = this.map.layers[i]
+      if (!layer.visible || layer.type !== 'object') continue
+      for (let j = (layer.paths || []).length - 1; j >= 0; j--) {
+        const path = layer.paths[j]
+        if (path.points.length < 1) continue
+        // Check proximity to waypoints
+        for (const p of path.points) {
+          const dx = worldX - p.x
+          const dy = worldY - p.y
+          if (Math.sqrt(dx * dx + dy * dy) < threshold) {
+            return { path, layerId: layer.id }
+          }
+        }
+        // Check proximity to segments
+        if (path.points.length >= 2) {
+          if (this.nearPolyline(worldX, worldY, path.points, threshold)) {
+            return { path, layerId: layer.id }
+          }
+          // Check closing segment for loops
+          if (path.loop && path.points.length >= 3) {
+            const last = path.points[path.points.length - 1]
+            const first = path.points[0]
+            if (this.distToSegment(worldX, worldY, last, first) < threshold) {
+              return { path, layerId: layer.id }
+            }
+          }
+        }
+      }
+    }
+    return null
   }
 
   private drawDrawingLayer(ctx: CanvasRenderingContext2D, layer: DrawingLayer): void {

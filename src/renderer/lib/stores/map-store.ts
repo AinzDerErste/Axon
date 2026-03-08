@@ -1,5 +1,5 @@
 import type { MapData, MapConfig } from '../models/map'
-import type { Layer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone, ObjectGroup } from '../models/layer'
+import type { Layer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone, Path, ObjectGroup } from '../models/layer'
 import type { Tileset } from '../models/tileset'
 import { createLayer, createObjectLayer, createImageLayer, createDrawingLayer } from '../models/layer'
 
@@ -157,6 +157,17 @@ export function updateZone(layerId: string, zoneId: string, updates: Partial<Pic
   const zone = layer.zones.find(z => z.id === zoneId)
   if (zone) {
     Object.assign(zone, updates)
+    notify()
+  }
+}
+
+export function updatePath(layerId: string, pathId: string, updates: Partial<Pick<Path, 'name' | 'color' | 'points' | 'loop' | 'assignedObjectId'>>): void {
+  if (!currentMap) return
+  const layer = currentMap.layers.find(l => l.id === layerId)
+  if (!layer || layer.type !== 'object') return
+  const path = layer.paths.find(p => p.id === pathId)
+  if (path) {
+    Object.assign(path, updates)
     notify()
   }
 }
