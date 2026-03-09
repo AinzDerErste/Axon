@@ -14,6 +14,8 @@ export interface MapObject {
   name: string
   imageDataUrl: string
   imageBitmap?: ImageBitmap
+  /** Hash key into the central image cache (runtime only, not persisted) */
+  imageHash?: string
   /** World X position (isometric space) */
   x: number
   /** World Y position (isometric space) */
@@ -95,6 +97,8 @@ export interface ImageLayer {
   imageDataUrl: string
   /** Decoded bitmap for rendering (not persisted) */
   imageBitmap?: ImageBitmap
+  /** Hash key into the central image cache (runtime only, not persisted) */
+  imageHash?: string
   /** World X position */
   x: number
   /** World Y position */

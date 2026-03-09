@@ -3,6 +3,7 @@ import type { MapData } from '../models/map'
 import type { Preset } from '../models/preset'
 import type { TileRef } from '../models/tile'
 import type { MapObject, Zone, TileLayer, ObjectLayer } from '../models/layer'
+import { registerImageSync, getBitmap } from '../stores/image-cache'
 
 /** Places an entire preset (tiles + objects + zones) on the map — undoable */
 export class PlacePresetCommand implements Command {
@@ -73,10 +74,13 @@ export class PlacePresetCommand implements Command {
         l => (l.type === 'object' || l.type === 'drawing') && l.name === presetObj.name
       ) || map.layers.find(l => l.type === 'object' || l.type === 'drawing')
       if (!objLayer || (objLayer.type !== 'object' && objLayer.type !== 'drawing')) continue
+      const hash = registerImageSync(presetObj.imageDataUrl)
       const newObj: MapObject = {
         id: crypto.randomUUID(),
         name: presetObj.name,
         imageDataUrl: presetObj.imageDataUrl,
+        imageHash: hash,
+        imageBitmap: getBitmap(hash),
         x: this.anchorWorldX + presetObj.relX,
         y: this.anchorWorldY + presetObj.relY,
         width: presetObj.width,
@@ -84,14 +88,6 @@ export class PlacePresetCommand implements Command {
         flipX: presetObj.flipX,
         flipY: presetObj.flipY,
         rotation: presetObj.rotation
-      }
-      // Reconstitute imageBitmap
-      const img = new Image()
-      img.src = presetObj.imageDataUrl
-      img.onload = () => {
-        createImageBitmap(img).then(bmp => {
-          newObj.imageBitmap = bmp
-        })
       }
       objLayer.objects.push(newObj)
       this.placedObjectIds.push({ layerId: objLayer.id, objectId: newObj.id })

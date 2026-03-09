@@ -17,6 +17,7 @@
   import { DeleteObjectCommand, ReorderObjectCommand } from '../../lib/commands/object-command'
   import { DeleteZoneCommand, ReorderZoneCommand } from '../../lib/commands/zone-command'
   import { DeletePathCommand, ReorderPathCommand } from '../../lib/commands/path-command'
+  import { registerImage, getBitmap } from '../../lib/stores/image-cache'
   import type { Layer, ObjectLayer, DrawingLayer, ObjectGroup } from '../../lib/models/layer'
 
   let layers = $state<Layer[]>([])
@@ -85,13 +86,13 @@
     const result = await window.electronAPI?.readImageFiles()
     if (!result || result.length === 0) return
     const file = result[0]
+    const hash = await registerImage(file.data)
     const img = new Image()
     img.src = file.data
     await new Promise<void>(resolve => {
-      img.onload = async () => {
-        const bmp = await createImageBitmap(img)
+      img.onload = () => {
         const name = file.name.replace(/\.[^.]+$/, '')
-        addImageLayer(name, file.data, bmp, img.naturalWidth, img.naturalHeight)
+        addImageLayer(name, file.data, getBitmap(hash)!, img.naturalWidth, img.naturalHeight)
         resolve()
       }
     })

@@ -19,6 +19,9 @@
     serializePresets, deserializePresets, clearPresets
   } from './lib/stores/preset-store'
   import {
+    registerImage, getDataUrl, clearAll as clearImageCache
+  } from './lib/stores/image-cache'
+  import {
     getSettings, subscribe as settingsSubscribe
   } from './lib/stores/settings-store'
 
@@ -139,6 +142,7 @@
   function handleMenuAction(action: string) {
     switch (action) {
       case 'new-map':
+        clearImageCache()
         showNewMapDialog = true
         setCurrentFilePath(null)
         break
@@ -206,8 +210,8 @@
     const map = getMap()
     if (!map) return
     const path = await window.electronAPI.showSaveDialog({
-      filters: [{ name: 'Axon Map Project', extensions: ['isomapproject'] }],
-      defaultPath: map.config.name + '.isomapproject'
+      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
+      defaultPath: map.config.name + '.axon'
     })
     if (!path) return
     setCurrentFilePath(path)
@@ -224,7 +228,7 @@
 
   async function handleOpen() {
     const paths = await window.electronAPI.showOpenDialog({
-      filters: [{ name: 'Axon Map Project', extensions: ['isomapproject'] }],
+      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
       properties: ['openFile']
     })
     if (!paths || paths.length === 0) return
@@ -249,7 +253,8 @@
               id: g.id, name: g.name, expanded: g.expanded ?? true
             })),
             objects: l.objects.map(o => ({
-              id: o.id, name: o.name, imageDataUrl: o.imageDataUrl,
+              id: o.id, name: o.name,
+              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
               x: o.x, y: o.y, width: o.width, height: o.height,
               flipX: o.flipX || false, flipY: o.flipY || false,
               rotation: o.rotation || 0,
@@ -274,7 +279,8 @@
             type: 'drawing',
             id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
             objects: l.objects.map(o => ({
-              id: o.id, name: o.name, imageDataUrl: o.imageDataUrl,
+              id: o.id, name: o.name,
+              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
               x: o.x, y: o.y, width: o.width, height: o.height,
               flipX: o.flipX || false, flipY: o.flipY || false,
               rotation: o.rotation || 0,
@@ -287,7 +293,7 @@
           return {
             type: 'image',
             id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-            imageDataUrl: l.imageDataUrl,
+            imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
             x: l.x, y: l.y, width: l.width, height: l.height,
             isoTransform: l.isoTransform || false,
             rotation: l.rotation || 0,
@@ -299,7 +305,7 @@
       tilesets: map.tilesets.map(ts => ({
         id: ts.id,
         name: ts.name,
-        imageDataUrl: ts.imageDataUrl,
+        imageDataUrl: (ts.imageHash && getDataUrl(ts.imageHash)) || ts.imageDataUrl,
         tileWidth: ts.tileWidth,
         tileHeight: ts.tileHeight,
         columns: ts.columns,
@@ -310,22 +316,16 @@
       camera: { x: 0, y: 0, zoom: 1 },
       objectLibrary: serializeLibrary(),
       presets: serializePresets()
-    }, null, 2)
+    })
   }
 
   async function loadProject(project: any) {
-    // Reconstitute ImageBitmaps from data URLs
+    // Clear previous project's image cache (closes all ImageBitmaps)
+    clearImageCache()
+
+    // Register tileset images in central cache
     for (const ts of project.tilesets) {
-      const img = new Image()
-      img.src = ts.imageDataUrl
-      await new Promise<void>(resolve => {
-        img.onload = () => {
-          createImageBitmap(img).then(bmp => {
-            ts.imageBitmap = bmp
-            resolve()
-          })
-        }
-      })
+      ts.imageHash = await registerImage(ts.imageDataUrl)
     }
 
     // Backward compat: default orientation
@@ -343,47 +343,20 @@
           if (!zone.zoneType) zone.zoneType = 'zone'
         }
         for (const obj of layer.objects) {
-          if (obj.imageDataUrl && !obj.imageBitmap) {
-            const img = new Image()
-            img.src = obj.imageDataUrl
-            await new Promise<void>(resolve => {
-              img.onload = () => {
-                createImageBitmap(img).then(bmp => {
-                  obj.imageBitmap = bmp
-                  resolve()
-                })
-              }
-            })
+          if (obj.imageDataUrl) {
+            obj.imageHash = await registerImage(obj.imageDataUrl)
           }
         }
       }
       if (layer.type === 'drawing') {
         for (const obj of layer.objects) {
-          if (obj.imageDataUrl && !obj.imageBitmap) {
-            const img = new Image()
-            img.src = obj.imageDataUrl
-            await new Promise<void>(resolve => {
-              img.onload = () => {
-                createImageBitmap(img).then(bmp => {
-                  obj.imageBitmap = bmp
-                  resolve()
-                })
-              }
-            })
+          if (obj.imageDataUrl) {
+            obj.imageHash = await registerImage(obj.imageDataUrl)
           }
         }
       }
-      if (layer.type === 'image' && layer.imageDataUrl && !layer.imageBitmap) {
-        const img = new Image()
-        img.src = layer.imageDataUrl
-        await new Promise<void>(resolve => {
-          img.onload = () => {
-            createImageBitmap(img).then(bmp => {
-              layer.imageBitmap = bmp
-              resolve()
-            })
-          }
-        })
+      if (layer.type === 'image' && layer.imageDataUrl) {
+        layer.imageHash = await registerImage(layer.imageDataUrl)
       }
     }
 

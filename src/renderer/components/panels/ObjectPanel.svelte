@@ -10,6 +10,7 @@
     subscribe as libSubscribe
   } from '../../lib/stores/object-library-store'
   import { getSettings, updateSettings } from '../../lib/stores/settings-store'
+  import { registerImage, getBitmap } from '../../lib/stores/image-cache'
 
   let objectLibrary = $state<ObjectImage[]>([])
   let selectedIdx = $state(-1)
@@ -86,12 +87,12 @@
         // New file — add to library
         const data = await window.electronAPI?.readImageFile(file.filePath)
         if (data) {
+          const hash = await registerImage(data.data)
           const img = new Image()
           img.src = data.data
           await new Promise<void>(resolve => {
-            img.onload = async () => {
-              const bmp = await createImageBitmap(img)
-              addToLibrary({ name: data.name, imageDataUrl: data.data, imageBitmap: bmp, width: img.naturalWidth, height: img.naturalHeight })
+            img.onload = () => {
+              addToLibrary({ name: data.name, imageDataUrl: data.data, imageBitmap: getBitmap(hash), imageHash: hash, width: img.naturalWidth, height: img.naturalHeight })
               resolve()
             }
             img.onerror = () => resolve()
@@ -102,12 +103,12 @@
         // Changed file — update in library
         const data = await window.electronAPI?.readImageFile(file.filePath)
         if (data) {
+          const hash = await registerImage(data.data)
           const img = new Image()
           img.src = data.data
           await new Promise<void>(resolve => {
-            img.onload = async () => {
-              const bmp = await createImageBitmap(img)
-              updateInLibrary({ name: data.name, imageDataUrl: data.data, imageBitmap: bmp, width: img.naturalWidth, height: img.naturalHeight })
+            img.onload = () => {
+              updateInLibrary({ name: data.name, imageDataUrl: data.data, imageBitmap: getBitmap(hash), imageHash: hash, width: img.naturalWidth, height: img.naturalHeight })
               resolve()
             }
             img.onerror = () => resolve()
@@ -159,15 +160,16 @@
       // Check if already in library
       if (objectLibrary.some(o => o.name === file.name)) continue
 
+      const hash = await registerImage(file.data)
       const img = new Image()
       img.src = file.data
       await new Promise<void>(resolve => {
-        img.onload = async () => {
-          const bmp = await createImageBitmap(img)
+        img.onload = () => {
           const objImg: ObjectImage = {
             name: file.name,
             imageDataUrl: file.data,
-            imageBitmap: bmp,
+            imageBitmap: getBitmap(hash),
+            imageHash: hash,
             width: img.naturalWidth,
             height: img.naturalHeight
           }

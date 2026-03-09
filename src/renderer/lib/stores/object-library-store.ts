@@ -4,6 +4,7 @@
  */
 
 import type { ObjectImage } from './object-selection-store'
+import { registerImage, getDataUrl, getBitmap } from './image-cache'
 
 /** Serializable form of an ObjectImage (no imageBitmap) */
 export interface SerializedObjectImage {
@@ -60,35 +61,28 @@ export function setLibrary(items: ObjectImage[]): void {
   notify()
 }
 
-/** Serialize for project file (strip imageBitmap) */
+/** Serialize for project file (strip imageBitmap, resolve dataUrl from cache) */
 export function serializeLibrary(): SerializedObjectImage[] {
   return library.map(o => ({
     name: o.name,
-    imageDataUrl: o.imageDataUrl,
+    imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
     width: o.width,
     height: o.height
   }))
 }
 
-/** Deserialize from project file (reconstitute imageBitmaps) */
+/** Deserialize from project file (register images in central cache) */
 export async function deserializeLibrary(items: SerializedObjectImage[]): Promise<void> {
   const result: ObjectImage[] = []
   for (const item of items) {
-    const img = new Image()
-    img.src = item.imageDataUrl
-    await new Promise<void>(resolve => {
-      img.onload = () => {
-        createImageBitmap(img).then(bmp => {
-          result.push({
-            name: item.name,
-            imageDataUrl: item.imageDataUrl,
-            imageBitmap: bmp,
-            width: item.width,
-            height: item.height
-          })
-          resolve()
-        })
-      }
+    const hash = await registerImage(item.imageDataUrl)
+    result.push({
+      name: item.name,
+      imageDataUrl: item.imageDataUrl,
+      imageBitmap: getBitmap(hash),
+      imageHash: hash,
+      width: item.width,
+      height: item.height
     })
   }
   library = result

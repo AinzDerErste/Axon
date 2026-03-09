@@ -36,6 +36,7 @@
   import { mapToScreen } from '../../lib/engine/iso-math'
   import type { Preset, PresetObject, PresetZone } from '../../lib/models/preset'
   import { matchesKey } from '../../lib/stores/keybindings-store'
+  import { registerImage, registerImageSync, getBitmap } from '../../lib/stores/image-cache'
   import SketchToolbar from './SketchToolbar.svelte'
 
   let canvasEl: HTMLCanvasElement
@@ -1236,13 +1237,14 @@
           reader.readAsDataURL(blob)
         })
 
-        const bmp = await createImageBitmap(blob)
+        const hash = await registerImage(dataUrl)
 
         const obj: MapObject = {
           id: crypto.randomUUID(),
           name: `Sketch (${settings.subTool})`,
           imageDataUrl: dataUrl,
-          imageBitmap: bmp,
+          imageHash: hash,
+          imageBitmap: getBitmap(hash),
           x: minX,
           y: minY,
           width: bboxW,
@@ -1319,13 +1321,14 @@
           reader.readAsDataURL(blob)
         })
 
-        const bmp = await createImageBitmap(blob)
+        const hash = await registerImage(dataUrl)
 
         const obj: MapObject = {
           id: crypto.randomUUID(),
           name: `Text "${textInputValue.substring(0, 20)}${textInputValue.length > 20 ? '...' : ''}"`,
           imageDataUrl: dataUrl,
-          imageBitmap: bmp,
+          imageHash: hash,
+          imageBitmap: getBitmap(hash),
           x: textWorldX - pad,
           y: textWorldY - pad,
           width: bboxW,
@@ -1950,15 +1953,10 @@
               x: src.x + 20,
               y: src.y + 20
             }
-            if (newObj.imageDataUrl && !newObj.imageBitmap) {
-              const img = new Image()
-              img.src = newObj.imageDataUrl
-              img.onload = () => {
-                createImageBitmap(img).then(bmp => {
-                  newObj.imageBitmap = bmp
-                  renderer.markDirty()
-                })
-              }
+            if (newObj.imageDataUrl) {
+              const hash = registerImageSync(newObj.imageDataUrl)
+              newObj.imageHash = hash
+              newObj.imageBitmap = getBitmap(hash)
             }
             placeCommands.push(new PlaceObjectCommand(targetLayerId, newObj))
             newIds.push(newObj.id)
@@ -1978,15 +1976,10 @@
             x: clipboardObject.x + 20,
             y: clipboardObject.y + 20
           }
-          if (newObj.imageDataUrl && !newObj.imageBitmap) {
-            const img = new Image()
-            img.src = newObj.imageDataUrl
-            img.onload = () => {
-              createImageBitmap(img).then(bmp => {
-                newObj.imageBitmap = bmp
-                renderer.markDirty()
-              })
-            }
+          if (newObj.imageDataUrl) {
+            const hash = registerImageSync(newObj.imageDataUrl)
+            newObj.imageHash = hash
+            newObj.imageBitmap = getBitmap(hash)
           }
           const cmd = new PlaceObjectCommand(targetLayerId, newObj)
           executeCommand(cmd)

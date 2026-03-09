@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import type { Tileset } from '../../lib/models/tileset'
   import type { TileEntry } from '../../lib/models/tile'
+  import { registerImage, getBitmap } from '../../lib/stores/image-cache'
 
   interface Props {
     imageData: string
@@ -122,12 +123,13 @@
 
     const columns = Math.floor((imgWidth - 2 * margin + spacing) / (tileWidth + spacing))
 
-    createImageBitmap(img).then(bmp => {
+    registerImage(imageData).then(hash => {
       const tileset: Tileset = {
         id: crypto.randomUUID(),
         name: imageName,
         imageDataUrl: imageData,
-        imageBitmap: bmp,
+        imageBitmap: getBitmap(hash),
+        imageHash: hash,
         tileWidth,
         tileHeight,
         columns,

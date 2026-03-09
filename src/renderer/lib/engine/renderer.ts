@@ -5,6 +5,16 @@ import { Camera } from './camera'
 import { drawGrid } from './grid-renderer'
 import { mapToScreen } from './iso-math'
 import { getVisibleRange } from './viewport'
+import { getBitmap } from '../stores/image-cache'
+
+/** Get bitmap from cache (via imageHash) or fall back to inline imageBitmap */
+function bmp(item: { imageHash?: string; imageBitmap?: ImageBitmap | null }): ImageBitmap | null {
+  if (item.imageHash) {
+    const cached = getBitmap(item.imageHash)
+    if (cached) return cached
+  }
+  return item.imageBitmap ?? null
+}
 
 /** Zone colors for new zones */
 const ZONE_COLORS = [
@@ -217,7 +227,7 @@ export class MapRenderer {
 
     for (const { col, row, tileRef } of this.previewTiles) {
       const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
-      if (!tileset?.imageBitmap) continue
+      if (!tileset || !bmp(tileset)) continue
 
       const tileEntry = tileset.tiles[tileRef.tileIndex]
       if (!tileEntry) continue
@@ -225,7 +235,7 @@ export class MapRenderer {
       const screen = mapToScreen(col, row, config.tileWidth, config.tileHeight, config.orientation || 'diamond')
 
       ctx.drawImage(
-        tileset.imageBitmap,
+        bmp(tileset)!,
         tileEntry.x, tileEntry.y,
         tileEntry.width, tileEntry.height,
         screen.x - tileEntry.width / 2,
@@ -255,10 +265,10 @@ export class MapRenderer {
         ctx.translate(cx, cy)
         if (hasRotation) ctx.rotate(rot)
         if (hasFlip) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
-        ctx.drawImage(obj.imageBitmap, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
         ctx.restore()
       } else {
-        ctx.drawImage(obj.imageBitmap, obj.x, obj.y, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
       }
     }
 
@@ -287,7 +297,7 @@ export class MapRenderer {
         if (!tileRef) continue
 
         const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
-        if (!tileset?.imageBitmap) continue
+        if (!tileset || !bmp(tileset)) continue
 
         const tileEntry = tileset.tiles[tileRef.tileIndex]
         if (!tileEntry) continue
@@ -295,7 +305,7 @@ export class MapRenderer {
         const screen = mapToScreen(col, row, config.tileWidth, config.tileHeight, config.orientation || 'diamond')
 
         ctx.drawImage(
-          tileset.imageBitmap,
+          bmp(tileset)!,
           tileEntry.x, tileEntry.y,
           tileEntry.width, tileEntry.height,
           screen.x - tileEntry.width / 2,
@@ -341,7 +351,7 @@ export class MapRenderer {
 
     // Draw objects in order
     for (const obj of objectsToDraw) {
-      if (!obj.imageBitmap) continue
+      if (!bmp(obj)) continue
       if (obj.visible === false) continue
 
       const rot = (obj.rotation || 0) * Math.PI / 180
@@ -355,10 +365,10 @@ export class MapRenderer {
         ctx.translate(cx, cy)
         if (hasRotation) ctx.rotate(rot)
         if (hasFlip) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
-        ctx.drawImage(obj.imageBitmap, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
         ctx.restore()
       } else {
-        ctx.drawImage(obj.imageBitmap, obj.x, obj.y, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
       }
 
       // Highlight selected object
@@ -469,7 +479,7 @@ export class MapRenderer {
   }
 
   private drawImageLayer(ctx: CanvasRenderingContext2D, layer: ImageLayer): void {
-    if (!layer.imageBitmap) return
+    if (!bmp(layer)) return
 
     const rot = (layer.rotation || 0) * Math.PI / 180
     const hasRotation = rot !== 0
@@ -487,7 +497,7 @@ export class MapRenderer {
         ctx.rotate(rot)
         ctx.translate(-layer.width / 2, -layer.height / 2)
       }
-      ctx.drawImage(layer.imageBitmap, 0, 0, layer.width, layer.height)
+      ctx.drawImage(bmp(layer)!, 0, 0, layer.width, layer.height)
       ctx.restore()
 
       // Selection highlight as polygon
@@ -515,7 +525,7 @@ export class MapRenderer {
     }
 
     // Plain non-transformed draw
-    ctx.drawImage(layer.imageBitmap, layer.x, layer.y, layer.width, layer.height)
+    ctx.drawImage(bmp(layer)!, layer.x, layer.y, layer.width, layer.height)
 
     // Selection highlight with corner resize handles
     if (layer.id === this.selectedImageLayerId) {
@@ -958,7 +968,7 @@ export class MapRenderer {
 
   private drawDrawingLayer(ctx: CanvasRenderingContext2D, layer: DrawingLayer): void {
     for (const obj of layer.objects) {
-      if (!obj.imageBitmap) continue
+      if (!bmp(obj)) continue
       if (obj.visible === false) continue
 
       const rot = (obj.rotation || 0) * Math.PI / 180
@@ -972,10 +982,10 @@ export class MapRenderer {
         ctx.translate(cx, cy)
         if (hasRotation) ctx.rotate(rot)
         if (hasFlip) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
-        ctx.drawImage(obj.imageBitmap, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
         ctx.restore()
       } else {
-        ctx.drawImage(obj.imageBitmap, obj.x, obj.y, obj.width, obj.height)
+        ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
       }
 
       if (this.selectedObjectIds.has(obj.id)) {
@@ -1183,16 +1193,16 @@ export class MapRenderer {
         if (!inBounds) continue
 
         // Pixel-precise: sample the alpha channel from the imageBitmap
-        if (obj.imageBitmap) {
-          const bmp = obj.imageBitmap
-          let px = localX * bmp.width
-          let py = localY * bmp.height
+        const objBmp = bmp(obj)
+        if (objBmp) {
+          let px = localX * objBmp.width
+          let py = localY * objBmp.height
           // Account for flips
-          if (obj.flipX) px = bmp.width - px
-          if (obj.flipY) py = bmp.height - py
+          if (obj.flipX) px = objBmp.width - px
+          if (obj.flipY) py = objBmp.height - py
           // Sample 1×1 pixel via the offscreen hit canvas
           this.hitCtx.clearRect(0, 0, 1, 1)
-          this.hitCtx.drawImage(bmp, Math.floor(px), Math.floor(py), 1, 1, 0, 0, 1, 1)
+          this.hitCtx.drawImage(objBmp, Math.floor(px), Math.floor(py), 1, 1, 0, 0, 1, 1)
           const alpha = this.hitCtx.getImageData(0, 0, 1, 1).data[3]
           if (alpha < 10) continue // transparent pixel → skip
         }

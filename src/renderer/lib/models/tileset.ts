@@ -5,6 +5,8 @@ export interface Tileset {
   name: string
   imageDataUrl: string
   imageBitmap: ImageBitmap | null
+  /** Hash key into the central image cache (runtime only, not persisted) */
+  imageHash?: string
   tileWidth: number
   tileHeight: number
   columns: number

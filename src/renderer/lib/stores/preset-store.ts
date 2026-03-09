@@ -4,13 +4,14 @@
  */
 
 import type { Preset } from '../models/preset'
+import { registerImage, getBitmap as getCachedBitmap } from './image-cache'
 
 let presets: Preset[] = []
 let selectedPresetId: string | null = null
 let listeners: Array<() => void> = []
 
-/** Cached ImageBitmaps for preset object previews, keyed by "presetId:objectIndex" */
-const presetObjectBitmaps: Map<string, ImageBitmap> = new Map()
+/** Image hash keys for preset objects, keyed by "presetId:objectIndex" */
+const presetObjectBitmaps: Map<string, string> = new Map()
 
 function notify(): void {
   for (const fn of listeners) fn()
@@ -97,23 +98,22 @@ export function deserializePresets(items: Preset[]): void {
   notify()
 }
 
-/** Ensure all objects in a preset have their ImageBitmaps cached */
+/** Ensure all objects in a preset have their ImageBitmaps cached in the central image cache */
 export function ensurePresetBitmaps(preset: Preset): void {
   for (let i = 0; i < preset.objects.length; i++) {
     const key = `${preset.id}:${i}`
     if (presetObjectBitmaps.has(key)) continue
     const obj = preset.objects[i]
-    const img = new Image()
-    img.src = obj.imageDataUrl
-    img.onload = () => {
-      createImageBitmap(img).then(bmp => {
-        presetObjectBitmaps.set(key, bmp)
-      })
-    }
+    // Register in central cache (async) and store hash in local map for lookup
+    registerImage(obj.imageDataUrl).then(hash => {
+      presetObjectBitmaps.set(key, hash)
+    })
   }
 }
 
-/** Get the cached ImageBitmap for a preset object */
+/** Get the cached ImageBitmap for a preset object (from central cache) */
 export function getPresetObjectBitmap(presetId: string, objectIndex: number): ImageBitmap | null {
-  return presetObjectBitmaps.get(`${presetId}:${objectIndex}`) ?? null
+  const hash = presetObjectBitmaps.get(`${presetId}:${objectIndex}`)
+  if (!hash) return null
+  return getCachedBitmap(hash)
 }

@@ -4,6 +4,8 @@ export interface ObjectImage {
   name: string
   imageDataUrl: string
   imageBitmap: ImageBitmap | null
+  /** Hash key into the central image cache (runtime only) */
+  imageHash?: string
   width: number
   height: number
 }

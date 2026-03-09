@@ -4,7 +4,7 @@ import type { Tileset } from './tileset'
 import type { SerializedObjectImage } from '../stores/object-library-store'
 import type { Preset } from './preset'
 
-/** On-disk format for .isomapproject files */
+/** On-disk format for .axon files */
 export interface ProjectFile {
   version: 1
   config: MapConfig

@@ -89,7 +89,7 @@ Full undo/redo support via the command pattern. Every edit (paint, erase, fill, 
 
 ### Project Files
 
-Axon saves projects as `.isomapproject` files (JSON-based). These include:
+Axon saves projects as `.axon` files (JSON-based). These include:
 
 - All layers with their data (tiles, objects, zones, drawings)
 - Tileset references and embedded tile images

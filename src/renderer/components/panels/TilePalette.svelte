@@ -6,6 +6,7 @@
   import SpritesheetSlicer from './SpritesheetSlicer.svelte'
   import type { Tileset } from '../../lib/models/tileset'
   import type { TileRef } from '../../lib/models/tile'
+  import { registerImage, getBitmap } from '../../lib/stores/image-cache'
 
   let tilesets = $state<Tileset[]>([])
   let selectedTile = $state<TileRef | null>(null)
@@ -93,12 +94,12 @@
         if (existing) {
           const data = await window.electronAPI?.readImageFile(file.filePath)
           if (data) {
+            const hash = await registerImage(data.data)
             const img = new Image()
             img.src = data.data
             await new Promise<void>(resolve => {
-              img.onload = async () => {
-                const bmp = await createImageBitmap(img)
-                updateTilesetImage(existing.id, data.data, bmp, img.naturalWidth, img.naturalHeight)
+              img.onload = () => {
+                updateTilesetImage(existing.id, data.data, getBitmap(hash), img.naturalWidth, img.naturalHeight)
                 resolve()
               }
               img.onerror = () => resolve()
@@ -127,25 +128,25 @@
   }
 
   async function addTileFromFile(dataUrl: string, name: string, sourcePath: string) {
+    const hash = await registerImage(dataUrl)
     const img = new Image()
     img.src = dataUrl
     await new Promise<void>(resolve => {
       img.onload = () => {
-        createImageBitmap(img).then(bmp => {
-          const tileset: Tileset = {
-            id: crypto.randomUUID(),
-            name,
-            imageDataUrl: dataUrl,
-            imageBitmap: bmp,
-            tileWidth: img.naturalWidth,
-            tileHeight: img.naturalHeight,
-            columns: 1,
-            tiles: [{ id: 0, x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight }],
-            sourcePath
-          }
-          addTileset(tileset)
-          resolve()
-        })
+        const tileset: Tileset = {
+          id: crypto.randomUUID(),
+          name,
+          imageDataUrl: dataUrl,
+          imageBitmap: getBitmap(hash),
+          imageHash: hash,
+          tileWidth: img.naturalWidth,
+          tileHeight: img.naturalHeight,
+          columns: 1,
+          tiles: [{ id: 0, x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight }],
+          sourcePath
+        }
+        addTileset(tileset)
+        resolve()
       }
       img.onerror = () => resolve()
     })
@@ -191,6 +192,7 @@
       if (!map) return
 
       for (const file of result) {
+        const hash = await registerImage(file.data)
         const img = new Image()
         img.src = file.data
         await new Promise<void>((resolve) => {
@@ -199,17 +201,15 @@
               id: crypto.randomUUID(),
               name: file.name,
               imageDataUrl: file.data,
-              imageBitmap: null,
+              imageBitmap: getBitmap(hash),
+              imageHash: hash,
               tileWidth: img.width,
               tileHeight: img.height,
               columns: 1,
               tiles: [{ id: 0, x: 0, y: 0, width: img.width, height: img.height }]
             }
-            createImageBitmap(img).then(bmp => {
-              tileset.imageBitmap = bmp
-              addTileset(tileset)
-              resolve()
-            })
+            addTileset(tileset)
+            resolve()
           }
         })
       }
@@ -271,26 +271,26 @@
     const ctx = canvas.getContext('2d')!
     ctx.clearRect(0, 0, size, size)
 
-    if (tileset.imageBitmap) {
+    const tsBmp = (tileset.imageHash && getBitmap(tileset.imageHash)) || tileset.imageBitmap
+    if (tsBmp) {
       const scale = Math.min(size / tile.width, size / tile.height)
       const dw = tile.width * scale
       const dh = tile.height * scale
-      ctx.drawImage(tileset.imageBitmap, tile.x, tile.y, tile.width, tile.height,
+      ctx.drawImage(tsBmp, tile.x, tile.y, tile.width, tile.height,
         (size - dw) / 2, (size - dh) / 2, dw, dh)
     } else {
       // Load bitmap if not yet available
-      const img = new Image()
-      img.src = tileset.imageDataUrl
-      img.onload = () => {
-        createImageBitmap(img).then(bmp => {
-          tileset.imageBitmap = bmp
+      registerImage(tileset.imageDataUrl).then(hash => {
+        tileset.imageHash = hash
+        const bmp = getBitmap(hash)
+        if (bmp) {
           const scale = Math.min(size / tile.width, size / tile.height)
           const dw = tile.width * scale
           const dh = tile.height * scale
           ctx.drawImage(bmp, tile.x, tile.y, tile.width, tile.height,
             (size - dw) / 2, (size - dh) / 2, dw, dh)
-        })
-      }
+        }
+      })
     }
   }
 </script>

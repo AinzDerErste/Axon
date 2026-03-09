@@ -1,5 +1,15 @@
 import type { MapData } from '../models/map'
 import { mapToScreen } from '../engine/iso-math'
+import { getBitmap } from '../stores/image-cache'
+
+/** Get bitmap from cache or fallback to inline */
+function bmp(item: { imageHash?: string; imageBitmap?: ImageBitmap | null }): ImageBitmap | null {
+  if (item.imageHash) {
+    const cached = getBitmap(item.imageHash)
+    if (cached) return cached
+  }
+  return item.imageBitmap ?? null
+}
 
 export async function exportMapAsPng(map: MapData): Promise<Blob> {
   const { config, layers, tilesets } = map
@@ -43,7 +53,7 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
     if (layer.type === 'object' || layer.type === 'drawing') {
       // Draw objects
       for (const obj of layer.objects) {
-        if (!obj.imageBitmap) continue
+        if (!bmp(obj)) continue
         if (obj.visible === false) continue
         if (obj.flipX || obj.flipY) {
           ctx.save()
@@ -51,17 +61,17 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
           const cy = obj.y + obj.height / 2
           ctx.translate(cx, cy)
           ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
-          ctx.drawImage(obj.imageBitmap, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
+          ctx.drawImage(bmp(obj)!, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
           ctx.restore()
         } else {
-          ctx.drawImage(obj.imageBitmap, obj.x, obj.y, obj.width, obj.height)
+          ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
         }
       }
       continue
     }
 
     if (layer.type === 'image') {
-      if (layer.imageBitmap) {
+      if (bmp(layer)) {
         const rot = (layer.rotation || 0) * Math.PI / 180
         const hasRotation = rot !== 0
         const hasIso = !!layer.isoTransform
@@ -80,10 +90,10 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
             ctx.rotate(rot)
             ctx.translate(-layer.width / 2, -layer.height / 2)
           }
-          ctx.drawImage(layer.imageBitmap, 0, 0, layer.width, layer.height)
+          ctx.drawImage(bmp(layer)!, 0, 0, layer.width, layer.height)
           ctx.restore()
         } else {
-          ctx.drawImage(layer.imageBitmap, layer.x, layer.y, layer.width, layer.height)
+          ctx.drawImage(bmp(layer)!, layer.x, layer.y, layer.width, layer.height)
         }
       }
       continue
@@ -95,14 +105,14 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
         if (!tileRef) continue
 
         const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
-        if (!tileset?.imageBitmap) continue
+        if (!tileset || !bmp(tileset)) continue
 
         const tileEntry = tileset.tiles[tileRef.tileIndex]
         if (!tileEntry) continue
 
         const screen = mapToScreen(col, row, tileWidth, tileHeight, orientation)
         ctx.drawImage(
-          tileset.imageBitmap,
+          bmp(tileset)!,
           tileEntry.x, tileEntry.y,
           tileEntry.width, tileEntry.height,
           screen.x - tileEntry.width / 2,
