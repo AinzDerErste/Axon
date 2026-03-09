@@ -2,6 +2,10 @@ import type { MapConfig } from '../models/map'
 import type { VisibleRange } from './viewport'
 import { mapToScreen } from './iso-math'
 
+/**
+ * Draw the full grid (lines + boundary + hover).
+ * Used as fallback when grid caching is not available.
+ */
 export function drawGrid(
   ctx: CanvasRenderingContext2D,
   config: MapConfig,
@@ -10,16 +14,58 @@ export function drawGrid(
   zoom: number = 1,
   visibleRange?: VisibleRange
 ): void {
-  const { gridWidth, gridHeight, tileWidth, tileHeight, orientation } = config
-  const o = orientation || 'diamond'
+  const o = config.orientation || 'diamond'
 
   if (o === 'staggered') {
-    drawStaggeredGrid(ctx, config, zoom, visibleRange)
+    drawStaggeredGridLines(ctx, config, visibleRange)
+    drawStaggeredBoundary(ctx, config, zoom)
   } else {
-    drawDiamondGrid(ctx, config, zoom, visibleRange)
+    drawDiamondGridLines(ctx, config, visibleRange)
+    drawDiamondBoundary(ctx, config, zoom)
   }
 
-  // Draw hover highlight
+  drawHoverHighlight(ctx, config, hoverCol, hoverRow)
+}
+
+/**
+ * Draw only the grid lines for the entire map (no range filter).
+ * Output is zoom-independent and suitable for caching to OffscreenCanvas.
+ */
+export function drawGridLinesFullMap(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  config: MapConfig
+): void {
+  const o = config.orientation || 'diamond'
+  if (o === 'staggered') {
+    drawStaggeredGridLines(ctx as CanvasRenderingContext2D, config)
+  } else {
+    drawDiamondGridLines(ctx as CanvasRenderingContext2D, config)
+  }
+}
+
+/** Draw the map boundary outline (zoom-dependent line width). */
+export function drawBoundary(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  zoom: number
+): void {
+  const o = config.orientation || 'diamond'
+  if (o === 'staggered') {
+    drawStaggeredBoundary(ctx, config, zoom)
+  } else {
+    drawDiamondBoundary(ctx, config, zoom)
+  }
+}
+
+/** Draw the hover tile highlight. */
+export function drawHoverHighlight(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  hoverCol: number,
+  hoverRow: number
+): void {
+  const { gridWidth, gridHeight, tileWidth, tileHeight, orientation } = config
+  const o = orientation || 'diamond'
   if (hoverCol >= 0 && hoverCol < gridWidth && hoverRow >= 0 && hoverRow < gridHeight) {
     const top = mapToScreen(hoverCol, hoverRow, tileWidth, tileHeight, o)
     const halfW = tileWidth / 2
@@ -38,21 +84,27 @@ export function drawGrid(
   }
 }
 
-function drawDiamondGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoom: number, range?: VisibleRange): void {
+// ── Internal helpers ──
+
+function drawDiamondGridLines(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  range?: VisibleRange
+): void {
   const { gridWidth, gridHeight, tileWidth, tileHeight } = config
 
-  // Use visible range with padding, clamped to grid bounds
   const minRow = range ? Math.max(0, range.minRow) : 0
   const maxRow = range ? Math.min(gridHeight, range.maxRow + 1) : gridHeight
   const minCol = range ? Math.max(0, range.minCol) : 0
   const maxCol = range ? Math.min(gridWidth, range.maxCol + 1) : gridWidth
 
-  // Batch all grid lines into a single path — one stroke call
+  const lineCount = (maxRow - minRow + 1) + (maxCol - minCol + 1)
+  if (lineCount > 2048) return
+
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'
   ctx.lineWidth = 1
   ctx.beginPath()
 
-  // Row lines (top-left to bottom-right)
   for (let row = minRow; row <= maxRow; row++) {
     const start = mapToScreen(minCol, row, tileWidth, tileHeight, 'diamond')
     const end = mapToScreen(maxCol, row, tileWidth, tileHeight, 'diamond')
@@ -60,7 +112,6 @@ function drawDiamondGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoom:
     ctx.lineTo(end.x, end.y)
   }
 
-  // Column lines (top-right to bottom-left)
   for (let col = minCol; col <= maxCol; col++) {
     const start = mapToScreen(col, minRow, tileWidth, tileHeight, 'diamond')
     const end = mapToScreen(col, maxRow, tileWidth, tileHeight, 'diamond')
@@ -69,8 +120,14 @@ function drawDiamondGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoom:
   }
 
   ctx.stroke()
+}
 
-  // Map boundary outline
+function drawDiamondBoundary(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  zoom: number
+): void {
+  const { gridWidth, gridHeight, tileWidth, tileHeight } = config
   const topPt = mapToScreen(0, 0, tileWidth, tileHeight, 'diamond')
   const rightPt = mapToScreen(gridWidth, 0, tileWidth, tileHeight, 'diamond')
   const bottomPt = mapToScreen(gridWidth, gridHeight, tileWidth, tileHeight, 'diamond')
@@ -87,53 +144,59 @@ function drawDiamondGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoom:
   ctx.stroke()
 }
 
-function drawStaggeredGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoom: number, range?: VisibleRange): void {
+function drawStaggeredGridLines(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  range?: VisibleRange
+): void {
   const { gridWidth, gridHeight, tileWidth, tileHeight } = config
   const halfW = tileWidth / 2
   const halfH = tileHeight / 2
 
-  // Use visible range with padding, clamped to grid bounds
   const minRow = range ? Math.max(0, range.minRow) : 0
   const maxRow = range ? Math.min(gridHeight - 1, range.maxRow) : gridHeight - 1
   const minCol = range ? Math.max(0, range.minCol) : 0
   const maxCol = range ? Math.min(gridWidth - 1, range.maxCol) : gridWidth - 1
 
-  // Only draw individual tile diamonds if visible count is manageable
-  const visibleCols = maxCol - minCol + 1
-  const visibleRows = maxRow - minRow + 1
-  const visibleTileCount = visibleCols * visibleRows
+  const visibleTileCount = (maxCol - minCol + 1) * (maxRow - minRow + 1)
+  if (visibleTileCount > 10000) return
 
-  if (visibleTileCount <= 10000) {
-    // Batch all visible tile diamonds into a single path — one stroke call
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
 
-    for (let row = minRow; row <= maxRow; row++) {
-      const isOdd = row & 1
-      const yTop = row * halfH
-      const xBase = isOdd ? halfW : 0
+  for (let row = minRow; row <= maxRow; row++) {
+    const isOdd = row & 1
+    const yTop = row * halfH
+    const xBase = isOdd ? halfW : 0
 
-      for (let col = minCol; col <= maxCol; col++) {
-        const x = xBase + col * tileWidth
-        ctx.moveTo(x, yTop)
-        ctx.lineTo(x + halfW, yTop + halfH)
-        ctx.lineTo(x, yTop + tileHeight)
-        ctx.lineTo(x - halfW, yTop + halfH)
-        ctx.closePath()
-      }
+    for (let col = minCol; col <= maxCol; col++) {
+      const x = xBase + col * tileWidth
+      ctx.moveTo(x, yTop)
+      ctx.lineTo(x + halfW, yTop + halfH)
+      ctx.lineTo(x, yTop + tileHeight)
+      ctx.lineTo(x - halfW, yTop + halfH)
+      ctx.closePath()
     }
-
-    ctx.stroke()
   }
 
-  // Map boundary outline
+  ctx.stroke()
+}
+
+function drawStaggeredBoundary(
+  ctx: CanvasRenderingContext2D,
+  config: MapConfig,
+  zoom: number
+): void {
+  const { gridWidth, gridHeight, tileWidth, tileHeight } = config
+  const halfW = tileWidth / 2
+  const halfH = tileHeight / 2
+
   ctx.strokeStyle = '#89b4fa'
   ctx.lineWidth = Math.max(2, 2 / zoom)
   ctx.beginPath()
 
   if (gridWidth + gridHeight <= 500) {
-    // Small/medium grids: precise zigzag boundary
     const topRow0 = mapToScreen(0, 0, tileWidth, tileHeight, 'staggered')
     ctx.moveTo(topRow0.x - halfW, topRow0.y + halfH)
     for (let col = 0; col < gridWidth; col++) {
@@ -160,7 +223,6 @@ function drawStaggeredGrid(ctx: CanvasRenderingContext2D, config: MapConfig, zoo
       ctx.lineTo(top.x, top.y)
     }
   } else {
-    // Large grids: simplified rectangular boundary (avoids 10k+ lineTo calls)
     const minX = -halfW
     const maxX = gridWidth * tileWidth + halfW
     const minY = 0

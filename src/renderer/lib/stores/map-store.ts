@@ -3,6 +3,20 @@ import type { Layer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone, Pat
 import type { Tileset } from '../models/tileset'
 import { createLayer, createObjectLayer, createImageLayer, createDrawingLayer } from '../models/layer'
 
+/** Cell count above which the UI shows a performance warning (not a hard limit) */
+export const LARGE_MAP_THRESHOLD = 1_000_000
+
+/** Normalise a config (floor to integers, enforce minimums). No upper clamp. */
+export function sanitizeConfig(config: MapConfig): MapConfig {
+  return {
+    ...config,
+    gridWidth: Math.max(1, Math.round(config.gridWidth)),
+    gridHeight: Math.max(1, Math.round(config.gridHeight)),
+    tileWidth: Math.max(8, config.tileWidth),
+    tileHeight: Math.max(8, config.tileHeight),
+  }
+}
+
 let currentMap: MapData | null = null
 let listeners: Array<() => void> = []
 
@@ -22,10 +36,11 @@ export function getMap(): MapData | null {
 }
 
 export function createNewMap(config: MapConfig): MapData {
+  const safe = sanitizeConfig(config)
   const layerId = crypto.randomUUID()
-  const layer = createLayer(layerId, 'Ground', config.gridHeight, config.gridWidth)
+  const layer = createLayer(layerId, 'Ground', safe.gridHeight, safe.gridWidth)
   currentMap = {
-    config,
+    config: safe,
     layers: [layer],
     tilesets: [],
     activeLayerId: layerId
@@ -389,17 +404,17 @@ export function toggleGroupExpanded(layerId: string, groupId: string): void {
 
 export function updateMapConfig(newConfig: MapConfig): void {
   if (!currentMap) return
+  const safe = sanitizeConfig(newConfig)
   const oldConfig = currentMap.config
-  const gridChanged = newConfig.gridWidth !== oldConfig.gridWidth || newConfig.gridHeight !== oldConfig.gridHeight
+  const gridChanged = safe.gridWidth !== oldConfig.gridWidth || safe.gridHeight !== oldConfig.gridHeight
 
   if (gridChanged) {
-    // Resize tile layer data arrays (top-left anchor: preserve existing tile positions)
     for (const layer of currentMap.layers) {
       if (layer.type !== 'tile') continue
       const newData: (import('../models/tile').TileRef | null)[][] = []
-      for (let r = 0; r < newConfig.gridHeight; r++) {
-        const row: (import('../models/tile').TileRef | null)[] = new Array(newConfig.gridWidth).fill(null)
-        for (let c = 0; c < newConfig.gridWidth; c++) {
+      for (let r = 0; r < safe.gridHeight; r++) {
+        const row: (import('../models/tile').TileRef | null)[] = new Array(safe.gridWidth).fill(null)
+        for (let c = 0; c < safe.gridWidth; c++) {
           if (r < oldConfig.gridHeight && c < oldConfig.gridWidth) {
             row[c] = layer.data[r]?.[c] ?? null
           }
@@ -410,6 +425,6 @@ export function updateMapConfig(newConfig: MapConfig): void {
     }
   }
 
-  currentMap.config = newConfig
+  currentMap.config = safe
   notify()
 }

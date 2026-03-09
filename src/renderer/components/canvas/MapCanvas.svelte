@@ -35,7 +35,7 @@
   import { PlacePresetCommand } from '../../lib/commands/preset-command'
   import { mapToScreen } from '../../lib/engine/iso-math'
   import type { Preset, PresetObject, PresetZone } from '../../lib/models/preset'
-  import { matchesKey } from '../../lib/stores/keybindings-store'
+  import { matchesKey, matchesMouseKey, isMouseBinding } from '../../lib/stores/keybindings-store'
   import { registerImage, registerImageSync, getBitmap } from '../../lib/stores/image-cache'
   import SketchToolbar from './SketchToolbar.svelte'
 
@@ -533,6 +533,7 @@
     const unsub = mapSubscribe(() => {
       const map = getMap()
       renderer.map = map
+      renderer.invalidateTileCaches()
       if (map) {
         const configKey = `${map.config.gridWidth}x${map.config.gridHeight}x${map.config.tileWidth}x${map.config.tileHeight}x${map.config.orientation || 'diamond'}`
         if (configKey !== lastMapConfigKey) {
@@ -644,7 +645,7 @@
       const map = getMap()
       if (!map) return
 
-      if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+      if (matchesMouseKey('canvas.pan', e) || (e.button === 0 && spaceHeld)) {
         isPanning = true
         lastPointerX = e.clientX
         lastPointerY = e.clientY
@@ -1058,6 +1059,7 @@
       strokePositions.push({ row, col })
       strokePreviousTiles.push(layer.data[row][col] ? { ...layer.data[row][col]! } : null)
       layer.data[row][col] = { ...tileRef }
+      renderer.invalidateTileCaches(layer.id)
       renderer.markDirty()
     }
 
@@ -1068,6 +1070,7 @@
       strokePositions.push({ row, col })
       strokePreviousTiles.push(layer.data[row][col] ? { ...layer.data[row][col]! } : null)
       layer.data[row][col] = null
+      renderer.invalidateTileCaches(layer.id)
       renderer.markDirty()
     }
 
@@ -1667,7 +1670,7 @@
               const rx = rect.x, ry = rect.y, rr = rect.x + rect.w, rb = rect.y + rect.h
               const hitIds: string[] = []
               for (const obj of layer.objects) {
-                // Object overlaps marquee if their AABBs intersect
+                if (obj.locked) continue
                 const ox = obj.x, oy = obj.y, or = obj.x + obj.width, ob = obj.y + obj.height
                 if (ox < rr && or > rx && oy < rb && ob > ry) {
                   hitIds.push(obj.id)
@@ -1897,137 +1900,109 @@
         return
       }
 
-      // Copy selected object(s)
-      if (matchesKey('canvas.copy', e)) {
-        const sel = getSelection()
-        if (sel && sel.type === 'objects') {
-          const map = getMap()
-          if (map) {
-            const layer = map.layers.find(l => l.id === sel.layerId)
-            if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
-              clipboardObjects = sel.objectIds
-                .map(id => layer.objects.find(o => o.id === id))
-                .filter((o): o is MapObject => !!o)
-                .map(o => ({ ...o }))
-              clipboardObject = null
-              clipboardLayerId = sel.layerId
-              e.preventDefault()
-            }
+      if (matchesKey('canvas.copy', e)) { doCopyAction(); e.preventDefault(); return }
+      if (matchesKey('canvas.paste', e)) { doPasteAction(); e.preventDefault(); return }
+      if (matchesKey('canvas.duplicate', e)) { doDuplicateAction(); e.preventDefault(); return }
+      if (matchesKey('canvas.delete', e) || e.code === 'Backspace') { doDeleteAction(); return }
+    }
+
+    function doCopyAction() {
+      const sel = getSelection()
+      if (sel && sel.type === 'objects') {
+        const map = getMap()
+        if (map) {
+          const layer = map.layers.find(l => l.id === sel.layerId)
+          if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
+            clipboardObjects = sel.objectIds
+              .map(id => layer.objects.find(o => o.id === id))
+              .filter((o): o is MapObject => !!o)
+              .map(o => ({ ...o }))
+            clipboardObject = null
+            clipboardLayerId = sel.layerId
           }
-        } else if (sel && sel.type === 'object') {
-          const map = getMap()
-          if (map) {
-            const layer = map.layers.find(l => l.id === sel.layerId)
-            if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
-              const obj = layer.objects.find(o => o.id === sel.objectId)
-              if (obj) {
-                clipboardObject = { ...obj }
-                clipboardObjects = []
-                clipboardLayerId = sel.layerId
-                e.preventDefault()
-              }
+        }
+      } else if (sel && sel.type === 'object') {
+        const map = getMap()
+        if (map) {
+          const layer = map.layers.find(l => l.id === sel.layerId)
+          if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
+            const obj = layer.objects.find(o => o.id === sel.objectId)
+            if (obj) {
+              clipboardObject = { ...obj }
+              clipboardObjects = []
+              clipboardLayerId = sel.layerId
             }
           }
         }
-        return
       }
+    }
 
-      // Paste copied object(s)
-      if (matchesKey('canvas.paste', e)) {
-        const map = getMap()
-        if (!map) return
+    function doPasteAction() {
+      const map = getMap()
+      if (!map) return
 
-        const activeLayer = map.layers.find(l => l.id === map.activeLayerId)
-        const targetLayerId = (activeLayer && (activeLayer.type === 'object' || activeLayer.type === 'drawing'))
-          ? activeLayer.id
-          : (clipboardLayerId || map.activeLayerId)
+      const activeLayer = map.layers.find(l => l.id === map.activeLayerId)
+      const targetLayerId = (activeLayer && (activeLayer.type === 'object' || activeLayer.type === 'drawing'))
+        ? activeLayer.id
+        : (clipboardLayerId || map.activeLayerId)
 
-        if (clipboardObjects.length > 0) {
-          // Multi-paste
-          const placeCommands: PlaceObjectCommand[] = []
-          const newIds: string[] = []
-          for (const src of clipboardObjects) {
-            const newObj: MapObject = {
-              ...src,
-              id: crypto.randomUUID(),
-              x: src.x + 20,
-              y: src.y + 20
-            }
-            if (newObj.imageDataUrl) {
-              const hash = registerImageSync(newObj.imageDataUrl)
-              newObj.imageHash = hash
-              newObj.imageBitmap = getBitmap(hash)
-            }
-            placeCommands.push(new PlaceObjectCommand(targetLayerId, newObj))
-            newIds.push(newObj.id)
-          }
-          const cmd = new BatchCommand('Paste objects', placeCommands)
-          executeCommand(cmd)
-          selectObjects(targetLayerId, newIds)
-          // Update clipboard for next paste offset
-          clipboardObjects = clipboardObjects.map(o => ({ ...o, x: o.x + 20, y: o.y + 20 }))
-          clipboardLayerId = targetLayerId
-          renderer.markDirty()
-          e.preventDefault()
-        } else if (clipboardObject) {
+      if (clipboardObjects.length > 0) {
+        const placeCommands: PlaceObjectCommand[] = []
+        const newIds: string[] = []
+        for (const src of clipboardObjects) {
           const newObj: MapObject = {
-            ...clipboardObject,
+            ...src,
             id: crypto.randomUUID(),
-            x: clipboardObject.x + 20,
-            y: clipboardObject.y + 20
+            x: src.x + 20,
+            y: src.y + 20
           }
           if (newObj.imageDataUrl) {
             const hash = registerImageSync(newObj.imageDataUrl)
             newObj.imageHash = hash
             newObj.imageBitmap = getBitmap(hash)
           }
-          const cmd = new PlaceObjectCommand(targetLayerId, newObj)
-          executeCommand(cmd)
-          selectObject(targetLayerId, newObj.id)
-          clipboardObject = { ...newObj }
-          clipboardLayerId = targetLayerId
-          renderer.markDirty()
-          e.preventDefault()
+          placeCommands.push(new PlaceObjectCommand(targetLayerId, newObj))
+          newIds.push(newObj.id)
         }
-        return
+        const cmd = new BatchCommand('Paste objects', placeCommands)
+        executeCommand(cmd)
+        selectObjects(targetLayerId, newIds)
+        clipboardObjects = clipboardObjects.map(o => ({ ...o, x: o.x + 20, y: o.y + 20 }))
+        clipboardLayerId = targetLayerId
+        renderer.markDirty()
+      } else if (clipboardObject) {
+        const newObj: MapObject = {
+          ...clipboardObject,
+          id: crypto.randomUUID(),
+          x: clipboardObject.x + 20,
+          y: clipboardObject.y + 20
+        }
+        if (newObj.imageDataUrl) {
+          const hash = registerImageSync(newObj.imageDataUrl)
+          newObj.imageHash = hash
+          newObj.imageBitmap = getBitmap(hash)
+        }
+        const cmd = new PlaceObjectCommand(targetLayerId, newObj)
+        executeCommand(cmd)
+        selectObject(targetLayerId, newObj.id)
+        clipboardObject = { ...newObj }
+        clipboardLayerId = targetLayerId
+        renderer.markDirty()
       }
+    }
 
-      // Duplicate selected object(s) in-place
-      if (matchesKey('canvas.duplicate', e)) {
-        const sel = getSelection()
-        const map = getMap()
-        if (!map) return
+    function doDuplicateAction() {
+      const sel = getSelection()
+      const map = getMap()
+      if (!map) return
 
-        if (sel && sel.type === 'objects') {
-          const layer = map.layers.find(l => l.id === sel.layerId)
-          if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
-            const placeCommands: PlaceObjectCommand[] = []
-            const newIds: string[] = []
-            for (const objId of sel.objectIds) {
-              const obj = layer.objects.find(o => o.id === objId)
-              if (obj) {
-                const newObj: MapObject = {
-                  ...obj,
-                  id: crypto.randomUUID(),
-                  x: obj.x + 20,
-                  y: obj.y + 20
-                }
-                placeCommands.push(new PlaceObjectCommand(sel.layerId, newObj))
-                newIds.push(newObj.id)
-              }
-            }
-            if (placeCommands.length > 0) {
-              const cmd = new BatchCommand('Duplicate objects', placeCommands)
-              executeCommand(cmd)
-              selectObjects(sel.layerId, newIds)
-              renderer.markDirty()
-              e.preventDefault()
-            }
-          }
-        } else if (sel && sel.type === 'object') {
-          const layer = map.layers.find(l => l.id === sel.layerId)
-          if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
-            const obj = layer.objects.find(o => o.id === sel.objectId)
+      if (sel && sel.type === 'objects') {
+        const layer = map.layers.find(l => l.id === sel.layerId)
+        if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
+          const placeCommands: PlaceObjectCommand[] = []
+          const newIds: string[] = []
+          for (const objId of sel.objectIds) {
+            const obj = layer.objects.find(o => o.id === objId)
             if (obj) {
               const newObj: MapObject = {
                 ...obj,
@@ -2035,65 +2010,83 @@
                 x: obj.x + 20,
                 y: obj.y + 20
               }
-              const cmd = new PlaceObjectCommand(sel.layerId, newObj)
-              executeCommand(cmd)
-              selectObject(sel.layerId, newObj.id)
-              renderer.markDirty()
-              e.preventDefault()
+              placeCommands.push(new PlaceObjectCommand(sel.layerId, newObj))
+              newIds.push(newObj.id)
             }
+          }
+          if (placeCommands.length > 0) {
+            const cmd = new BatchCommand('Duplicate objects', placeCommands)
+            executeCommand(cmd)
+            selectObjects(sel.layerId, newIds)
+            renderer.markDirty()
           }
         }
-        return
-      }
-
-      // Delete selected object(s) or zone (skip if locked)
-      if (matchesKey('canvas.delete', e) || e.code === 'Backspace') {
-        const sel = getSelection()
-        if (!sel) return
-        const map = getMap()
-        if (!map) return
+      } else if (sel && sel.type === 'object') {
         const layer = map.layers.find(l => l.id === sel.layerId)
-        if (!layer || (layer.type !== 'object' && layer.type !== 'drawing')) return
-
-        if (sel.type === 'objects') {
-          const deleteCommands: DeleteObjectCommand[] = []
-          for (const objId of sel.objectIds) {
-            const obj = layer.objects.find(o => o.id === objId)
-            if (obj && !obj.locked) {
-              deleteCommands.push(new DeleteObjectCommand(sel.layerId, obj))
-            }
-          }
-          if (deleteCommands.length > 0) {
-            const cmd = new BatchCommand('Delete objects', deleteCommands)
-            executeCommand(cmd)
-            clearSelection()
-            renderer.markDirty()
-          }
-        } else if (sel.type === 'object') {
+        if (layer && (layer.type === 'object' || layer.type === 'drawing')) {
           const obj = layer.objects.find(o => o.id === sel.objectId)
-          if (obj && !obj.locked) {
-            const cmd = new DeleteObjectCommand(sel.layerId, obj)
-            executeCommand(cmd)
-            clearSelection()
-            renderer.markDirty()
-          }
-        } else if (sel.type === 'zone') {
-          const zone = layer.zones.find(z => z.id === sel.zoneId)
-          if (zone) {
-            const cmd = new DeleteZoneCommand(sel.layerId, zone)
-            executeCommand(cmd)
-            clearSelection()
-            renderer.markDirty()
-          }
-        } else if (sel.type === 'path') {
-          if (layer.type === 'object') {
-            const path = layer.paths.find(p => p.id === sel.pathId)
-            if (path) {
-              const cmd = new DeletePathCommand(sel.layerId, path)
-              executeCommand(cmd)
-              clearSelection()
-              renderer.markDirty()
+          if (obj) {
+            const newObj: MapObject = {
+              ...obj,
+              id: crypto.randomUUID(),
+              x: obj.x + 20,
+              y: obj.y + 20
             }
+            const cmd = new PlaceObjectCommand(sel.layerId, newObj)
+            executeCommand(cmd)
+            selectObject(sel.layerId, newObj.id)
+            renderer.markDirty()
+          }
+        }
+      }
+    }
+
+    function doDeleteAction() {
+      const sel = getSelection()
+      if (!sel) return
+      const map = getMap()
+      if (!map) return
+      const layer = map.layers.find(l => l.id === sel.layerId)
+      if (!layer || (layer.type !== 'object' && layer.type !== 'drawing')) return
+
+      if (sel.type === 'objects') {
+        const deleteCommands: DeleteObjectCommand[] = []
+        for (const objId of sel.objectIds) {
+          const obj = layer.objects.find(o => o.id === objId)
+          if (obj && !obj.locked) {
+            deleteCommands.push(new DeleteObjectCommand(sel.layerId, obj))
+          }
+        }
+        if (deleteCommands.length > 0) {
+          const cmd = new BatchCommand('Delete objects', deleteCommands)
+          executeCommand(cmd)
+          clearSelection()
+          renderer.markDirty()
+        }
+      } else if (sel.type === 'object') {
+        const obj = layer.objects.find(o => o.id === sel.objectId)
+        if (obj && !obj.locked) {
+          const cmd = new DeleteObjectCommand(sel.layerId, obj)
+          executeCommand(cmd)
+          clearSelection()
+          renderer.markDirty()
+        }
+      } else if (sel.type === 'zone') {
+        const zone = layer.zones.find(z => z.id === sel.zoneId)
+        if (zone) {
+          const cmd = new DeleteZoneCommand(sel.layerId, zone)
+          executeCommand(cmd)
+          clearSelection()
+          renderer.markDirty()
+        }
+      } else if (sel.type === 'path') {
+        if (layer.type === 'object') {
+          const path = layer.paths.find(p => p.id === sel.pathId)
+          if (path) {
+            const cmd = new DeletePathCommand(sel.layerId, path)
+            executeCommand(cmd)
+            clearSelection()
+            renderer.markDirty()
           }
         }
       }
@@ -2101,6 +2094,20 @@
 
     function handleKeyUp(e: KeyboardEvent) {
       if (matchesKey('canvas.pan', e)) spaceHeld = false
+    }
+
+    function handleMouseBindDown(e: MouseEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+
+      let matched = false
+      if (matchesMouseKey('canvas.copy', e)) { doCopyAction(); matched = true }
+      if (matchesMouseKey('canvas.paste', e)) { doPasteAction(); matched = true }
+      if (matchesMouseKey('canvas.duplicate', e)) { doDuplicateAction(); matched = true }
+      if (matchesMouseKey('canvas.delete', e)) { doDeleteAction(); matched = true }
+      if (matched) e.preventDefault()
+    }
+
+    function handleMouseBindUp(_e: MouseEvent) {
     }
 
     function handleToggleGrid() {
@@ -2142,6 +2149,8 @@
     document.addEventListener('mousedown', handleDocClickForCtxMenu, true)
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('mousedown', handleMouseBindDown)
+    window.addEventListener('mouseup', handleMouseBindUp)
     window.addEventListener('toggle-grid', handleToggleGrid)
     window.addEventListener('jump-to', handleJumpTo)
 
@@ -2160,6 +2169,8 @@
       document.removeEventListener('mousedown', handleDocClickForCtxMenu, true)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('mousedown', handleMouseBindDown)
+      window.removeEventListener('mouseup', handleMouseBindUp)
       window.removeEventListener('toggle-grid', handleToggleGrid)
       window.removeEventListener('jump-to', handleJumpTo)
     }

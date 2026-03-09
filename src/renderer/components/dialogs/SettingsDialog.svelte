@@ -3,8 +3,9 @@
   import { getSettings, updateSettings } from '../../lib/stores/settings-store'
   import { getHistory } from '../../lib/stores/history-store'
   import {
-    getKeyBindings, setKey, resetKey, resetAll, findConflict,
-    eventToKeyString, formatKey,
+    getKeyBindings, getKeys, setKeyAt, addKey, removeKeyAt,
+    resetKey, resetAll, findConflict,
+    eventToKeyString, mouseEventToKeyString, formatKey,
     subscribe as kbSubscribe
   } from '../../lib/stores/keybindings-store'
   import type { KeyBinding } from '../../lib/stores/keybindings-store'
@@ -28,6 +29,7 @@
   // Keybinding state
   let keyBindings = $state<KeyBinding[]>(getKeyBindings())
   let listeningId = $state<string | null>(null)
+  let listeningIndex = $state(-1) // -1 = adding new, >= 0 = editing existing slot
   let conflictMsg = $state('')
 
   onMount(() => {
@@ -47,6 +49,7 @@
       jumpToZoom = s.jumpToZoom
       keyBindings = getKeyBindings().map(b => ({ ...b }))
       listeningId = null
+      listeningIndex = -1
       conflictMsg = ''
     }
   })
@@ -75,6 +78,34 @@
     show = false
   }
 
+  function applyListeningKey(keyStr: string) {
+    if (!listeningId) return
+
+    const currentKeys = getKeys(listeningId)
+    const isDuplicate = currentKeys.some((k, i) =>
+      k === keyStr.toLowerCase() && (listeningIndex === -1 || i !== listeningIndex)
+    )
+    if (isDuplicate) {
+      conflictMsg = `"${formatKey(keyStr)}" is already assigned to this action`
+      return
+    }
+
+    const conflict = findConflict(keyStr, listeningId)
+    if (conflict) {
+      conflictMsg = `"${formatKey(keyStr)}" is already used by "${conflict.label}"`
+      return
+    }
+
+    if (listeningIndex >= 0) {
+      setKeyAt(listeningId, listeningIndex, keyStr)
+    } else {
+      addKey(listeningId, keyStr)
+    }
+    listeningId = null
+    listeningIndex = -1
+    conflictMsg = ''
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (listeningId) {
       e.preventDefault()
@@ -82,22 +113,14 @@
 
       if (e.key === 'Escape') {
         listeningId = null
+        listeningIndex = -1
         conflictMsg = ''
         return
       }
 
       const keyStr = eventToKeyString(e)
       if (!keyStr) return
-
-      const conflict = findConflict(keyStr, listeningId)
-      if (conflict) {
-        conflictMsg = `"${formatKey(keyStr)}" is already used by "${conflict.label}"`
-        return
-      }
-
-      setKey(listeningId, keyStr)
-      listeningId = null
-      conflictMsg = ''
+      applyListeningKey(keyStr)
       return
     }
 
@@ -105,20 +128,49 @@
     if (e.key === 'Enter' && activeTab === 'general') handleApply()
   }
 
-  function startListening(id: string) {
+  function handleMousedown(e: MouseEvent) {
+    if (!listeningId) return
+    e.preventDefault()
+    e.stopPropagation()
+    const keyStr = mouseEventToKeyString(e)
+    if (!keyStr) return
+    applyListeningKey(keyStr)
+  }
+
+  function handleContextmenu(e: Event) {
+    if (listeningId) e.preventDefault()
+  }
+
+  function startListeningAt(id: string, index: number) {
     listeningId = id
+    listeningIndex = index
+    conflictMsg = ''
+  }
+
+  function startListeningAdd(id: string) {
+    listeningId = id
+    listeningIndex = -1
+    conflictMsg = ''
+  }
+
+  function handleRemoveKey(id: string, index: number) {
+    removeKeyAt(id, index)
+    listeningId = null
+    listeningIndex = -1
     conflictMsg = ''
   }
 
   function handleResetKey(id: string) {
     resetKey(id)
     listeningId = null
+    listeningIndex = -1
     conflictMsg = ''
   }
 
   function handleResetAll() {
     resetAll()
     listeningId = null
+    listeningIndex = -1
     conflictMsg = ''
   }
 
@@ -129,7 +181,7 @@
 
 {#if show}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="overlay" onkeydown={handleKeydown}>
+  <div class="overlay" onkeydown={handleKeydown} onmousedown={handleMousedown} oncontextmenu={handleContextmenu}>
     <div class="dialog">
       <h3>Settings</h3>
 
@@ -198,28 +250,58 @@
               <div class="kb-category">
                 <h4 class="kb-category-label">{category}</h4>
                 {#each getBindingsByCategory(category) as binding}
+                  {@const keys = binding.key.split(',').map(k => k.trim()).filter(Boolean)}
                   <div class="kb-row">
                     <span class="kb-label">{binding.label}</span>
                     <div class="kb-controls">
+                      {#each keys as subKey, idx}
+                        <div class="kb-key-group">
+                          <button
+                            class="kb-key-btn"
+                            class:listening={listeningId === binding.id && listeningIndex === idx}
+                            onclick={() => startListeningAt(binding.id, idx)}
+                          >
+                            {#if listeningId === binding.id && listeningIndex === idx}
+                              Press key / mouse...
+                            {:else}
+                              {formatKey(subKey)}
+                            {/if}
+                          </button>
+                          {#if keys.length > 1}
+                            <button
+                              class="kb-remove-btn"
+                              title="Remove this key"
+                              onclick={() => handleRemoveKey(binding.id, idx)}
+                            >
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M2 2l6 6M8 2l-6 6"/>
+                              </svg>
+                            </button>
+                          {/if}
+                        </div>
+                      {/each}
+                      {#if listeningId === binding.id && listeningIndex === -1}
+                        <button class="kb-key-btn listening">
+                          Press key / mouse...
+                        </button>
+                      {/if}
                       <button
-                        class="kb-key-btn"
-                        class:listening={listeningId === binding.id}
-                        onclick={() => startListening(binding.id)}
+                        class="kb-add-btn"
+                        title="Add alternative key"
+                        onclick={() => startListeningAdd(binding.id)}
                       >
-                        {#if listeningId === binding.id}
-                          Press a key...
-                        {:else}
-                          {formatKey(binding.key)}
-                        {/if}
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8">
+                          <path d="M5 1v8M1 5h8"/>
+                        </svg>
                       </button>
                       {#if binding.key !== binding.defaultKey}
                         <button
                           class="kb-reset-btn"
-                          title="Reset to {formatKey(binding.defaultKey)}"
+                          title="Reset to default"
                           onclick={() => handleResetKey(binding.id)}
                         >
                           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M2 2l8 8M10 2l-8 8"/>
+                            <path d="M1 4l3-3v2a5 5 0 1 1-1.5 5" stroke-linecap="round" stroke-linejoin="round"/>
                           </svg>
                         </button>
                       {/if}
@@ -394,10 +476,18 @@
     display: flex;
     align-items: center;
     gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .kb-key-group {
+    display: flex;
+    align-items: center;
+    gap: 1px;
   }
 
   .kb-key-btn {
-    min-width: 80px;
+    min-width: 60px;
     padding: 4px 10px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -407,6 +497,7 @@
     font-family: monospace;
     cursor: pointer;
     text-align: center;
+    white-space: nowrap;
   }
 
   .kb-key-btn:hover {
@@ -425,6 +516,45 @@
     50% { opacity: 0.7; }
   }
 
+  .kb-remove-btn {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    opacity: 0.6;
+  }
+
+  .kb-remove-btn:hover {
+    color: var(--danger);
+    opacity: 1;
+  }
+
+  .kb-add-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px dashed var(--border-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-add-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .kb-reset-btn {
     width: 24px;
     height: 24px;
@@ -440,8 +570,8 @@
   }
 
   .kb-reset-btn:hover {
-    color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 15%, transparent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
   }
 
   .kb-conflict {

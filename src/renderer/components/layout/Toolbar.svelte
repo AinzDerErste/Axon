@@ -4,7 +4,7 @@
   import { getHistory, undo, redo } from '../../lib/stores/history-store'
   import { getZoomPercentLabel, subscribe as uiSubscribe } from '../../lib/stores/ui-store'
   import { getMap, createNewMap } from '../../lib/stores/map-store'
-  import { matchesKey, formatKey, getKey, subscribe as kbSubscribe } from '../../lib/stores/keybindings-store'
+  import { matchesKey, matchesMouseKey, formatKey, formatAllKeys, getKey, subscribe as kbSubscribe } from '../../lib/stores/keybindings-store'
   import type { ToolType } from '../../lib/stores/tool-store'
 
   let activeTool = $state<ToolType>('paint')
@@ -55,7 +55,7 @@
   function updateKeyLabels() {
     const labels: Record<string, string> = {}
     for (const tool of [...tileTools, ...objectTools]) {
-      labels[tool.type] = formatKey(getKey(tool.bindingId))
+      labels[tool.type] = formatAllKeys(tool.bindingId)
     }
     toolKeyLabels = labels
   }
@@ -86,9 +86,25 @@
       else if (matchesKey('tool.stamp', e)) setActiveTool('stamp')
       else if (e.ctrlKey && e.key === 'n') { e.preventDefault(); handleNewMap() }
     }
+    function handleMouseDown(e: MouseEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (matchesMouseKey('tool.paint', e)) setActiveTool('paint')
+      else if (matchesMouseKey('tool.eraser', e)) setActiveTool('eraser')
+      else if (matchesMouseKey('tool.fill', e)) setActiveTool('fill')
+      else if (matchesMouseKey('tool.select', e)) setActiveTool('select')
+      else if (matchesMouseKey('tool.object', e)) setActiveTool('object')
+      else if (matchesMouseKey('tool.zone', e)) setActiveTool('zone')
+      else if (matchesMouseKey('tool.collision', e)) setActiveTool('collision')
+      else if (matchesMouseKey('tool.path', e)) setActiveTool('path')
+      else if (matchesMouseKey('tool.sketch', e)) setActiveTool('sketch')
+      else if (matchesMouseKey('tool.stamp', e)) setActiveTool('stamp')
+      else return
+      e.preventDefault()
+    }
     window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('mousedown', handleMouseDown)
 
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); window.removeEventListener('keydown', handleKeyDown) }
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('mousedown', handleMouseDown) }
   })
 </script>
 
@@ -106,7 +122,7 @@
     {#each tileTools as tool}
       <button
         class:active={activeTool === tool.type}
-        title="{tool.label} ({toolKeyLabels[tool.type] || formatKey(getKey(tool.bindingId))})"
+        title="{tool.label} ({toolKeyLabels[tool.type] || formatAllKeys(tool.bindingId)})"
         onclick={() => selectTool(tool.type)}
       >
         <svg class="tool-icon" viewBox={tool.viewBox} fill="currentColor"><path d={tool.path}/></svg>
@@ -120,7 +136,7 @@
     {#each objectTools as tool}
       <button
         class:active={activeTool === tool.type}
-        title="{tool.label} ({toolKeyLabels[tool.type] || formatKey(getKey(tool.bindingId))})"
+        title="{tool.label} ({toolKeyLabels[tool.type] || formatAllKeys(tool.bindingId)})"
         onclick={() => selectTool(tool.type)}
       >
         <svg class="tool-icon" viewBox={tool.viewBox} fill="currentColor"><path d={tool.path}/></svg>

@@ -4,6 +4,13 @@ import { registerIpcHandlers } from './ipc-handlers'
 import { createAppMenu } from './menu'
 import { initUpdater } from './updater'
 
+// GPU acceleration flags — must be set before app.ready
+app.commandLine.appendSwitch('enable-gpu-rasterization')
+app.commandLine.appendSwitch('enable-zero-copy')
+app.commandLine.appendSwitch('ignore-gpu-blocklist')
+app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
+app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization')
+
 function createWindow(): BrowserWindow {
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -31,6 +38,16 @@ function createWindow(): BrowserWindow {
   })
   mainWindow.on('unmaximize', () => {
     mainWindow.webContents.send('window:maximized-changed', false)
+  })
+
+  mainWindow.on('unresponsive', () => {
+    console.warn('[main] Renderer became unresponsive')
+  })
+  mainWindow.on('responsive', () => {
+    console.info('[main] Renderer is responsive again')
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[main] Render process gone:', details.reason)
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {

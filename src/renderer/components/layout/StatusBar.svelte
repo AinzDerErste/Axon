@@ -28,33 +28,43 @@
       hoverText = h.col >= 0 ? `Tile: (${h.col}, ${h.row})` : 'Tile: (-,-)'
       zoomText = `Zoom: ${getZoomPercentLabel()}%`
     })
+    let statsTimer: ReturnType<typeof setTimeout> | null = null
+
+    function computeTileStats() {
+      const map = getMap()
+      if (!map) { tileStats = ''; return }
+      let tiles = 0, objects = 0, zones = 0
+      const cellBudget = 500_000
+      for (const l of map.layers) {
+        if (l.type === 'tile') {
+          const totalCells = map.config.gridWidth * map.config.gridHeight
+          if (totalCells > cellBudget) {
+            tiles = -1
+          } else if (tiles !== -1) {
+            for (const row of l.data) {
+              for (const cell of row) { if (cell) tiles++ }
+            }
+          }
+        } else if (l.type === 'object') {
+          objects += l.objects.length
+          zones += l.zones.length
+        }
+      }
+      const parts: string[] = []
+      parts.push(tiles === -1 ? 'Tiles: (large map)' : `Tiles: ${tiles}`)
+      if (objects > 0) parts.push(`Obj: ${objects}`)
+      if (zones > 0) parts.push(`Zones: ${zones}`)
+      tileStats = parts.join(' | ')
+    }
+
     const unsub2 = mapSubscribe(() => {
       const map = getMap()
       const layer = getActiveLayer()
       layerText = layer ? `Layer: ${layer.name}` : 'Layer: -'
       mapText = map ? `Map: ${map.config.gridWidth}×${map.config.gridHeight}` : 'No map'
 
-      // Compute tile/object/zone statistics
-      if (map) {
-        let tiles = 0, objects = 0, zones = 0
-        for (const l of map.layers) {
-          if (l.type === 'tile') {
-            for (const row of l.data) {
-              for (const cell of row) { if (cell) tiles++ }
-            }
-          } else if (l.type === 'object') {
-            objects += l.objects.length
-            zones += l.zones.length
-          }
-        }
-        const parts: string[] = []
-        parts.push(`Tiles: ${tiles}`)
-        if (objects > 0) parts.push(`Obj: ${objects}`)
-        if (zones > 0) parts.push(`Zones: ${zones}`)
-        tileStats = parts.join(' | ')
-      } else {
-        tileStats = ''
-      }
+      if (statsTimer) clearTimeout(statsTimer)
+      statsTimer = setTimeout(computeTileStats, 200)
     })
 
     function handleProjectSaved() { showSaveToast() }
@@ -75,6 +85,7 @@
 
     return () => {
       unsub1(); unsub2(); clearInterval(interval)
+      if (statsTimer) clearTimeout(statsTimer)
       window.removeEventListener('project-saved', handleProjectSaved)
       if (toastTimer) clearTimeout(toastTimer)
     }

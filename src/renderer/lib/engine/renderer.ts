@@ -1,8 +1,9 @@
 import type { MapData } from '../models/map'
 import type { Layer, TileLayer, ObjectLayer, ImageLayer, DrawingLayer, MapObject, Zone, Path } from '../models/layer'
 import type { TileRef } from '../models/tile'
+import type { Tileset } from '../models/tileset'
 import { Camera } from './camera'
-import { drawGrid } from './grid-renderer'
+import { drawGrid, drawGridLinesFullMap, drawBoundary, drawHoverHighlight } from './grid-renderer'
 import { mapToScreen } from './iso-math'
 import { getVisibleRange } from './viewport'
 import { getBitmap } from '../stores/image-cache'
@@ -102,6 +103,19 @@ export class MapRenderer {
   sketchStrokeWidth: number = 3
   sketchFill: boolean = false
 
+  /** Tileset index for O(1) lookup by ID (rebuilt per frame) */
+  private tilesetIndex: Map<string, Tileset> = new Map()
+
+  /** Cached sorted object arrays per layer (invalidated on object changes) */
+  private sortCache: Map<string, { objects: MapObject[]; key: string }> = new Map()
+
+  /** Tile-layer cache: world-space OffscreenCanvas per layer for fast pan/zoom */
+  private tileCaches = new Map<string, { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; valid: boolean }>()
+  private tileCacheBounds: { x: number; y: number; w: number; h: number } | null = null
+  private gridCache: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; valid: boolean } | null = null
+  private lastCfgKey = ''
+  private static readonly MAX_CACHE_DIM = 16384
+
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!
     this.hitCtx = this.hitCanvas.getContext('2d')!
@@ -125,6 +139,107 @@ export class MapRenderer {
 
   destroy(): void {
     cancelAnimationFrame(this.animFrameId)
+    this.tileCaches.clear()
+    this.tileCacheBounds = null
+    this.gridCache = null
+  }
+
+  /** Recompute tile cache world-space bounds. Disables caching for maps exceeding GPU limits. */
+  private updateTileCacheBounds(): void {
+    this.tileCaches.clear()
+    this.tileCacheBounds = null
+    this.gridCache = null
+    if (!this.map) return
+
+    const { gridWidth: gw, gridHeight: gh, tileWidth: tw, tileHeight: th } = this.map.config
+    const o = this.map.config.orientation || 'diamond'
+
+    let maxTileW = tw, maxTileH = th
+    for (const ts of this.map.tilesets) {
+      for (const t of ts.tiles) {
+        if (t.width > maxTileW) maxTileW = t.width
+        if (t.height > maxTileH) maxTileH = t.height
+      }
+    }
+
+    let minX: number, maxX: number, minY: number, maxY: number
+    if (o === 'staggered') {
+      minX = -tw
+      maxX = (gw + 1) * tw
+      minY = -maxTileH
+      maxY = (gh + 1) * (th / 2) + th
+    } else {
+      minX = -gh * (tw / 2) - maxTileW / 2
+      maxX = gw * (tw / 2) + maxTileW / 2
+      minY = -(maxTileH - th)
+      maxY = (gw + gh) * (th / 2) + th
+    }
+
+    const w = Math.ceil(maxX - minX)
+    const h = Math.ceil(maxY - minY)
+    if (w <= 0 || h <= 0 || w > MapRenderer.MAX_CACHE_DIM || h > MapRenderer.MAX_CACHE_DIM) return
+
+    this.tileCacheBounds = { x: Math.floor(minX), y: Math.floor(minY), w, h }
+  }
+
+  /** Render all tiles of a layer into its offscreen cache canvas */
+  private renderTileLayerToCache(
+    entry: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D },
+    layer: TileLayer
+  ): void {
+    const { config } = this.map!
+    const bounds = this.tileCacheBounds!
+    const ctx = entry.ctx
+
+    ctx.clearRect(0, 0, bounds.w, bounds.h)
+    ctx.save()
+    ctx.translate(-bounds.x, -bounds.y)
+
+    const order = config.renderOrder || 'right-down'
+    const rowStart = order.includes('up') ? config.gridHeight - 1 : 0
+    const rowEnd   = order.includes('up') ? -1 : config.gridHeight
+    const rowStep  = order.includes('up') ? -1 : 1
+    const colStart = order.includes('left') ? config.gridWidth - 1 : 0
+    const colEnd   = order.includes('left') ? -1 : config.gridWidth
+    const colStep  = order.includes('left') ? -1 : 1
+
+    for (let row = rowStart; row !== rowEnd; row += rowStep) {
+      for (let col = colStart; col !== colEnd; col += colStep) {
+        const tileRef = layer.data[row]?.[col]
+        if (!tileRef) continue
+
+        const tileset = this.tilesetIndex.get(tileRef.tilesetId)
+        if (!tileset || !bmp(tileset)) continue
+
+        const tileEntry = tileset.tiles[tileRef.tileIndex]
+        if (!tileEntry) continue
+
+        const screen = mapToScreen(col, row, config.tileWidth, config.tileHeight, config.orientation || 'diamond')
+
+        ctx.drawImage(
+          bmp(tileset)!,
+          tileEntry.x, tileEntry.y,
+          tileEntry.width, tileEntry.height,
+          screen.x - tileEntry.width / 2,
+          screen.y + config.tileHeight - tileEntry.height,
+          tileEntry.width, tileEntry.height
+        )
+      }
+    }
+
+    ctx.restore()
+  }
+
+  /** Invalidate tile layer caches. Call when tile data changes. */
+  invalidateTileCaches(layerId?: string): void {
+    if (layerId) {
+      const entry = this.tileCaches.get(layerId)
+      if (entry) entry.valid = false
+    } else {
+      for (const entry of this.tileCaches.values()) {
+        entry.valid = false
+      }
+    }
   }
 
   private getViewportSize(): { width: number; height: number } {
@@ -149,6 +264,17 @@ export class MapRenderer {
       ctx.font = '12px -apple-system, sans-serif'
       ctx.fillText('Create a new map to start (File > New)', width / 2, height / 2 + 14)
       return
+    }
+
+    // Rebuild tileset index for O(1) lookup this frame
+    this.tilesetIndex.clear()
+    for (const ts of map.tilesets) this.tilesetIndex.set(ts.id, ts)
+
+    // Detect map config changes → recompute tile cache bounds
+    const cfgKey = `${map.config.gridWidth}:${map.config.gridHeight}:${map.config.tileWidth}:${map.config.tileHeight}:${map.config.orientation || 'diamond'}:${map.tilesets.length}`
+    if (cfgKey !== this.lastCfgKey) {
+      this.lastCfgKey = cfgKey
+      this.updateTileCacheBounds()
     }
 
     ctx.save()
@@ -199,7 +325,22 @@ export class MapRenderer {
 
     // Draw grid overlay
     if (this.showGrid) {
-      drawGrid(ctx, map.config, this.hoverCol, this.hoverRow, camera.zoom, visibleRange)
+      if (this.tileCacheBounds) {
+        // Cached grid lines (static in world space)
+        if (!this.gridCache) {
+          const { w, h } = this.tileCacheBounds
+          const canvas = new OffscreenCanvas(w, h)
+          const gctx = canvas.getContext('2d')!
+          gctx.translate(-this.tileCacheBounds.x, -this.tileCacheBounds.y)
+          drawGridLinesFullMap(gctx, map.config)
+          this.gridCache = { canvas, ctx: gctx, valid: true }
+        }
+        ctx.drawImage(this.gridCache.canvas, this.tileCacheBounds.x, this.tileCacheBounds.y)
+        drawBoundary(ctx, map.config, camera.zoom)
+        drawHoverHighlight(ctx, map.config, this.hoverCol, this.hoverRow)
+      } else {
+        drawGrid(ctx, map.config, this.hoverCol, this.hoverRow, camera.zoom, visibleRange)
+      }
     }
 
     // Draw marquee selection rectangle
@@ -220,13 +361,13 @@ export class MapRenderer {
 
   private drawPreviewTiles(ctx: CanvasRenderingContext2D): void {
     if (!this.map || !this.previewTiles) return
-    const { config, tilesets } = this.map
+    const { config } = this.map
 
     ctx.save()
     ctx.globalAlpha = 0.5
 
     for (const { col, row, tileRef } of this.previewTiles) {
-      const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
+      const tileset = this.tilesetIndex.get(tileRef.tilesetId)
       if (!tileset || !bmp(tileset)) continue
 
       const tileEntry = tileset.tiles[tileRef.tileIndex]
@@ -275,13 +416,40 @@ export class MapRenderer {
     ctx.restore()
   }
 
+  /** Max cells to iterate per tile-layer per frame to keep the UI responsive */
+  private static readonly MAX_VISIBLE_CELLS = 250_000
+
   private drawTileLayer(
     ctx: CanvasRenderingContext2D,
     layer: TileLayer,
     range: { minCol: number; maxCol: number; minRow: number; maxRow: number }
   ): void {
     if (!this.map) return
-    const { config, tilesets } = this.map
+    const { config } = this.map
+
+    // ── Cached path: composite a pre-rendered OffscreenCanvas ──
+    if (this.tileCacheBounds) {
+      let entry = this.tileCaches.get(layer.id)
+      if (!entry) {
+        const { w, h } = this.tileCacheBounds
+        const canvas = new OffscreenCanvas(w, h)
+        entry = { canvas, ctx: canvas.getContext('2d')!, valid: false }
+        this.tileCaches.set(layer.id, entry)
+      }
+      if (!entry.valid) {
+        this.renderTileLayerToCache(entry, layer)
+        entry.valid = true
+      }
+      ctx.drawImage(entry.canvas, this.tileCacheBounds.x, this.tileCacheBounds.y)
+      return
+    }
+
+    // ── Direct rendering fallback (very large maps that exceed cache limits) ──
+    const visibleCols = range.maxCol - range.minCol + 1
+    const visibleRows = range.maxRow - range.minRow + 1
+    if (visibleCols * visibleRows > MapRenderer.MAX_VISIBLE_CELLS) {
+      return
+    }
 
     const order = config.renderOrder || 'right-down'
     const rowStart = order.includes('up') ? range.maxRow : range.minRow
@@ -296,7 +464,7 @@ export class MapRenderer {
         const tileRef = layer.data[row]?.[col]
         if (!tileRef) continue
 
-        const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
+        const tileset = this.tilesetIndex.get(tileRef.tilesetId)
         if (!tileset || !bmp(tileset)) continue
 
         const tileEntry = tileset.tiles[tileRef.tileIndex]
@@ -316,6 +484,37 @@ export class MapRenderer {
     }
   }
 
+  /** Get sorted objects for an object layer, using cache when possible.
+   *  Cache key = concatenation of object positions so it invalidates on any move/add/remove. */
+  private getSortedObjects(layer: ObjectLayer): MapObject[] {
+    if (layer.sortMode === 'manual') return layer.objects
+
+    // Build a lightweight cache key from object count + positions
+    // Changes on add/remove/move/resize — cheap to compute
+    let key = `${layer.objects.length}:`
+    for (const o of layer.objects) {
+      key += `${o.id}${o.x}${o.y}${o.height}`
+    }
+
+    const cached = this.sortCache.get(layer.id)
+    if (cached && cached.key === key) return cached.objects
+
+    const order = this.map?.config.renderOrder || 'right-down'
+    const sorted = [...layer.objects].sort((a, b) => {
+      const ay = a.y + a.height
+      const by = b.y + b.height
+      const ax = a.x + a.width / 2
+      const bx = b.x + b.width / 2
+      const yDir = order.includes('up') ? -1 : 1
+      const yDiff = (ay - by) * yDir
+      if (yDiff !== 0) return yDiff
+      const xDir = order.includes('left') ? -1 : 1
+      return (ax - bx) * xDir
+    })
+    this.sortCache.set(layer.id, { objects: sorted, key })
+    return sorted
+  }
+
   private drawObjectLayer(ctx: CanvasRenderingContext2D, layer: ObjectLayer): void {
     // Draw zones first (below objects)
     for (const zone of layer.zones) {
@@ -328,26 +527,7 @@ export class MapRenderer {
     }
 
     // Determine draw order based on layer sort mode
-    let objectsToDraw: MapObject[]
-
-    if (layer.sortMode === 'manual') {
-      // Manual mode: draw in array order (first = behind, last = on top)
-      objectsToDraw = layer.objects
-    } else {
-      // Auto mode (default): sort by isometric depth
-      const order = this.map?.config.renderOrder || 'right-down'
-      objectsToDraw = [...layer.objects].sort((a, b) => {
-        const ay = a.y + a.height
-        const by = b.y + b.height
-        const ax = a.x + a.width / 2
-        const bx = b.x + b.width / 2
-        const yDir = order.includes('up') ? -1 : 1
-        const yDiff = (ay - by) * yDir
-        if (yDiff !== 0) return yDiff
-        const xDir = order.includes('left') ? -1 : 1
-        return (ax - bx) * xDir
-      })
-    }
+    const objectsToDraw = this.getSortedObjects(layer)
 
     // Draw objects in order
     for (const obj of objectsToDraw) {
@@ -938,6 +1118,7 @@ export class MapRenderer {
       if (!layer.visible || layer.type !== 'object') continue
       for (let j = (layer.paths || []).length - 1; j >= 0; j--) {
         const path = layer.paths[j]
+        if (path.locked) continue
         if (path.points.length < 1) continue
         // Check proximity to waypoints
         for (const p of path.points) {
@@ -1142,27 +1323,15 @@ export class MapRenderer {
       if (layer.type === 'drawing') {
         // Drawing layers always use array order
         ordered = layer.objects
-      } else if (layer.sortMode === 'manual') {
-        // Manual mode: array order is draw order, iterate in reverse (last = topmost)
-        ordered = layer.objects
       } else {
-        // Auto mode: sort same way as rendering
-        ordered = [...layer.objects].sort((a, b) => {
-          const ay = a.y + a.height
-          const by = b.y + b.height
-          const ax = a.x + a.width / 2
-          const bx = b.x + b.width / 2
-          const yDir = order.includes('up') ? -1 : 1
-          const yDiff = (ay - by) * yDir
-          if (yDiff !== 0) return yDiff
-          const xDir = order.includes('left') ? -1 : 1
-          return (ax - bx) * xDir
-        })
+        // Use cached sort (returns array order for manual mode)
+        ordered = this.getSortedObjects(layer as ObjectLayer)
       }
 
       for (let j = ordered.length - 1; j >= 0; j--) {
         const obj = ordered[j]
         if (obj.visible === false) continue
+        if (obj.locked) continue
 
         const rot = (obj.rotation || 0) * Math.PI / 180
         let inBounds = false
@@ -1220,6 +1389,7 @@ export class MapRenderer {
       if (!layer.visible || layer.type !== 'object') continue
       for (let j = layer.zones.length - 1; j >= 0; j--) {
         const zone = layer.zones[j]
+        if (zone.locked) continue
         if (zone.points.length < 2) continue
         if (zone.closed && this.pointInPolygon(worldX, worldY, zone.points)) {
           return { zone, layerId: layer.id }
@@ -1240,6 +1410,7 @@ export class MapRenderer {
     for (let i = this.map.layers.length - 1; i >= 0; i--) {
       const layer = this.map.layers[i]
       if (!layer.visible || layer.type !== 'image') continue
+      if (layer.locked) continue
       if (this.imageLayerHasTransform(layer)) {
         const corners = this.getImageLayerCorners(layer)
         if (corners.length === 4 && this.pointInPolygon(worldX, worldY, corners)) {

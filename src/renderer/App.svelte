@@ -5,13 +5,14 @@
   import Sidebar from './components/layout/Sidebar.svelte'
   import StatusBar from './components/layout/StatusBar.svelte'
   import UpdateToast from './components/layout/UpdateToast.svelte'
+  import GpuToast from './components/layout/GpuToast.svelte'
   import MapCanvas from './components/canvas/MapCanvas.svelte'
   import NewMapDialog from './components/dialogs/NewMapDialog.svelte'
   import MapPropertiesDialog from './components/dialogs/MapPropertiesDialog.svelte'
   import SettingsDialog from './components/dialogs/SettingsDialog.svelte'
   import AboutDialog from './components/dialogs/AboutDialog.svelte'
   import { undo, redo, getHistory } from './lib/stores/history-store'
-  import { getMap, setMap } from './lib/stores/map-store'
+  import { getMap, setMap, sanitizeConfig } from './lib/stores/map-store'
   import {
     serializeLibrary, deserializeLibrary, clearLibrary
   } from './lib/stores/object-library-store'
@@ -323,13 +324,33 @@
     // Clear previous project's image cache (closes all ImageBitmaps)
     clearImageCache()
 
-    // Register tileset images in central cache
+    // Register all images in central cache in parallel
+    const imagePromises: Promise<void>[] = []
+
+    // Tilesets
     for (const ts of project.tilesets) {
-      ts.imageHash = await registerImage(ts.imageDataUrl)
+      imagePromises.push(registerImage(ts.imageDataUrl).then(h => { ts.imageHash = h }))
     }
 
     // Backward compat: default orientation
     if (!project.config.orientation) project.config.orientation = 'diamond'
+
+    // Sanitize grid dimensions to prevent freeze on oversized projects
+    project.config = sanitizeConfig(project.config)
+
+    // Trim tile layer data to match sanitized grid dimensions
+    for (const layer of project.layers) {
+      if (layer.type === 'tile' && Array.isArray(layer.data)) {
+        if (layer.data.length > project.config.gridHeight) {
+          layer.data.length = project.config.gridHeight
+        }
+        for (let r = 0; r < layer.data.length; r++) {
+          if (Array.isArray(layer.data[r]) && layer.data[r].length > project.config.gridWidth) {
+            layer.data[r].length = project.config.gridWidth
+          }
+        }
+      }
+    }
 
     // Reconstitute object layer images and ensure layer types
     for (const layer of project.layers) {
@@ -344,21 +365,24 @@
         }
         for (const obj of layer.objects) {
           if (obj.imageDataUrl) {
-            obj.imageHash = await registerImage(obj.imageDataUrl)
+            imagePromises.push(registerImage(obj.imageDataUrl).then(h => { obj.imageHash = h }))
           }
         }
       }
       if (layer.type === 'drawing') {
         for (const obj of layer.objects) {
           if (obj.imageDataUrl) {
-            obj.imageHash = await registerImage(obj.imageDataUrl)
+            imagePromises.push(registerImage(obj.imageDataUrl).then(h => { obj.imageHash = h }))
           }
         }
       }
       if (layer.type === 'image' && layer.imageDataUrl) {
-        layer.imageHash = await registerImage(layer.imageDataUrl)
+        imagePromises.push(registerImage(layer.imageDataUrl).then(h => { layer.imageHash = h }))
       }
     }
+
+    // Wait for all image registrations to complete
+    await Promise.all(imagePromises)
 
     // Restore object library
     if (project.objectLibrary && Array.isArray(project.objectLibrary)) {
@@ -490,6 +514,7 @@
   <StatusBar />
 </div>
 <UpdateToast />
+<GpuToast />
 
 {#if isSaving}
   <div class="saving-overlay">

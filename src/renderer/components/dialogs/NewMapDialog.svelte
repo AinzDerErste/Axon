@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createNewMap } from '../../lib/stores/map-store'
+  import { createNewMap, LARGE_MAP_THRESHOLD } from '../../lib/stores/map-store'
   import { getHistory } from '../../lib/stores/history-store'
   import type { Orientation, RenderOrder } from '../../lib/models/map'
 
@@ -38,6 +38,17 @@
 
   function handleTileHeightInput() {
     syncAngleFromTiles()
+  }
+
+  let sizeWarning = $state('')
+
+  function validateSize() {
+    const cells = Math.max(1, gridWidth) * Math.max(1, gridHeight)
+    if (cells > LARGE_MAP_THRESHOLD) {
+      sizeWarning = `Large map (${cells.toLocaleString()} cells). Grid lines and tile stats will be simplified at far zoom levels.`
+    } else {
+      sizeWarning = ''
+    }
   }
 
   function handleCreate() {
@@ -98,13 +109,16 @@
         <div class="field-row">
           <div class="field">
             <label for="grid-w">Grid Width</label>
-            <input id="grid-w" type="number" min="1" max="256" bind:value={gridWidth} />
+            <input id="grid-w" type="number" min="1" bind:value={gridWidth} oninput={validateSize} />
           </div>
           <div class="field">
             <label for="grid-h">Grid Height</label>
-            <input id="grid-h" type="number" min="1" max="256" bind:value={gridHeight} />
+            <input id="grid-h" type="number" min="1" bind:value={gridHeight} oninput={validateSize} />
           </div>
         </div>
+        {#if sizeWarning}
+          <div class="warning">{sizeWarning}</div>
+        {/if}
         <div class="field">
           <label for="iso-angle">Iso Angle (°)</label>
           <input id="iso-angle" type="number" min="1" max="89" step="0.001" bind:value={isoAngle} oninput={handleAngleInput} />
@@ -213,6 +227,14 @@
   .presets button {
     padding: 2px 8px;
     font-size: var(--font-size-sm);
+  }
+
+  .warning {
+    font-size: var(--font-size-sm);
+    color: #fab387;
+    background: rgba(250, 179, 135, 0.1);
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
   }
 
   .buttons {

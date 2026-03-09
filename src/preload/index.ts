@@ -40,6 +40,13 @@ const electronAPI = {
   readImageFile: (filePath: string) =>
     ipcRenderer.invoke('folder:readImageFile', filePath) as Promise<{ data: string; name: string } | null>,
 
+  // GPU info
+  getGpuStatus: () => ipcRenderer.invoke('gpu:getStatus') as Promise<{
+    accelerated: boolean
+    gpuName?: string
+    features: Record<string, string>
+  }>,
+
   // Auto-update API
   getAppVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),

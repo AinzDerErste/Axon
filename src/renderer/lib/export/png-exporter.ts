@@ -45,6 +45,10 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
   const ctx = offscreen.getContext('2d')!
   ctx.translate(-minX, -minY)
 
+  // Build tileset index for O(1) lookup
+  const tilesetIndex = new Map<string, typeof tilesets[number]>()
+  for (const ts of tilesets) tilesetIndex.set(ts.id, ts)
+
   // Draw layers bottom to top
   for (const layer of layers) {
     if (!layer.visible) continue
@@ -104,7 +108,7 @@ export async function exportMapAsPng(map: MapData): Promise<Blob> {
         const tileRef = layer.data[row]?.[col]
         if (!tileRef) continue
 
-        const tileset = tilesets.find(ts => ts.id === tileRef.tilesetId)
+        const tileset = tilesetIndex.get(tileRef.tilesetId)
         if (!tileset || !bmp(tileset)) continue
 
         const tileEntry = tileset.tiles[tileRef.tileIndex]

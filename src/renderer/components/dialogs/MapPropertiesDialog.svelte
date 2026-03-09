@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getMap, updateMapConfig } from '../../lib/stores/map-store'
+  import { getMap, updateMapConfig, LARGE_MAP_THRESHOLD } from '../../lib/stores/map-store'
   import { getHistory } from '../../lib/stores/history-store'
   import type { Orientation, RenderOrder } from '../../lib/models/map'
 
@@ -57,20 +57,34 @@
     syncAngleFromTiles()
   }
 
+  let sizeWarning = $state('')
+
+  function validateSize() {
+    const cells = Math.max(1, gridWidth) * Math.max(1, gridHeight)
+    if (cells > LARGE_MAP_THRESHOLD) {
+      sizeWarning = `Large map (${cells.toLocaleString()} cells). Grid lines and tile stats will be simplified at far zoom levels.`
+    } else {
+      sizeWarning = ''
+    }
+  }
+
   function checkGridChanged() {
     const map = getMap()
     if (!map) return
     gridChanged = gridWidth !== map.config.gridWidth || gridHeight !== map.config.gridHeight
+    validateSize()
   }
 
   function handleApply() {
     const map = getMap()
     if (!map) return
-    const sizeChanged = gridWidth !== map.config.gridWidth || gridHeight !== map.config.gridHeight
+    const w = Math.max(1, gridWidth)
+    const h = Math.max(1, gridHeight)
+    const sizeChanged = w !== map.config.gridWidth || h !== map.config.gridHeight
     updateMapConfig({
       name,
-      gridWidth: Math.max(1, gridWidth),
-      gridHeight: Math.max(1, gridHeight),
+      gridWidth: w,
+      gridHeight: h,
       tileWidth: Math.max(8, tileWidth),
       tileHeight: Math.max(8, tileHeight),
       orientation,
@@ -123,13 +137,16 @@
         <div class="field-row">
           <div class="field">
             <label for="prop-grid-w">Grid Width</label>
-            <input id="prop-grid-w" type="number" min="1" max="256" bind:value={gridWidth} oninput={checkGridChanged} />
+            <input id="prop-grid-w" type="number" min="1" bind:value={gridWidth} oninput={checkGridChanged} />
           </div>
           <div class="field">
             <label for="prop-grid-h">Grid Height</label>
-            <input id="prop-grid-h" type="number" min="1" max="256" bind:value={gridHeight} oninput={checkGridChanged} />
+            <input id="prop-grid-h" type="number" min="1" bind:value={gridHeight} oninput={checkGridChanged} />
           </div>
         </div>
+        {#if sizeWarning}
+          <div class="warning">{sizeWarning}</div>
+        {/if}
         <div class="field">
           <label for="prop-iso-angle">Iso Angle (°)</label>
           <input id="prop-iso-angle" type="number" min="1" max="89" step="0.001" bind:value={isoAngle} oninput={handleAngleInput} />

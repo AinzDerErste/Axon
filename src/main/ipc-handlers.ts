@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, app } from 'electron'
+import { ipcMain, dialog, BrowserWindow, app, type GPUFeatureStatus } from 'electron'
 import * as os from 'os'
 import * as path from 'path'
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises'
@@ -157,6 +157,35 @@ export function registerIpcHandlers(): void {
       systemMemUsedMB: usedMemMB,
       systemMemTotalMB: totalMemMB,
       gpuMemMB
+    }
+  })
+
+  // GPU feature status
+  ipcMain.handle('gpu:getStatus', async () => {
+    try {
+      const features = app.getGPUFeatureStatus()
+      const gpuInfo: any = await app.getGPUInfo('basic')
+      const devices: { vendorId: number; deviceId: number; description?: string }[] =
+        gpuInfo?.gpuDevice ?? []
+      const gpuName = devices[0]?.description || undefined
+
+      const gpuAccelerated =
+        features.gpu_compositing === 'enabled' ||
+        features.gpu_compositing === 'enabled_on'
+
+      return {
+        accelerated: gpuAccelerated,
+        gpuName,
+        features: {
+          compositing: features.gpu_compositing,
+          canvas: (features as any)['canvas_oop_rasterization'] ?? (features as any)['2d_canvas'] ?? 'unknown',
+          rasterization: features.gpu_rasterization,
+          webgl: features.webgl,
+          webgl2: features.webgl2
+        }
+      }
+    } catch {
+      return { accelerated: false, features: {} }
     }
   })
 

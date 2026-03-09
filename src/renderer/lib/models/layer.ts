@@ -47,6 +47,8 @@ export interface Zone {
   closed: boolean
   /** Zone type: regular zone or collision zone */
   zoneType?: 'zone' | 'collision'
+  /** Prevent moving, resizing, and deleting */
+  locked?: boolean
 }
 
 /** A waypoint path for patrol routes or movement paths */
@@ -60,6 +62,8 @@ export interface Path {
   loop: boolean
   /** ID of the MapObject that follows this path */
   assignedObjectId?: string
+  /** Prevent moving, resizing, and deleting */
+  locked?: boolean
 }
 
 export interface TileLayer {
