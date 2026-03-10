@@ -38,6 +38,9 @@
   import { matchesKey, matchesMouseKey, isMouseBinding } from '../../lib/stores/keybindings-store'
   import { registerImage, registerImageSync, getBitmap } from '../../lib/stores/image-cache'
   import SketchToolbar from './SketchToolbar.svelte'
+  import CollabOverlay from '../collab/CollabOverlay.svelte'
+  import { collabStore } from '../../lib/collab/collab-store'
+  import * as collabClient from '../../lib/collab/collab-client'
 
   let canvasEl: HTMLCanvasElement
   let containerEl: HTMLDivElement
@@ -580,6 +583,39 @@
       renderer.sketchFill = s.fill
       renderer.markDirty()
     })
+
+    // Sync collab remote cursors → renderer
+    const unsubCollab = collabStore.subscribe(() => {
+      const cursors = collabStore.getRemoteCursors()
+      const users = collabStore.getUsers()
+      const myId = collabClient.getUserId()
+      const arr: typeof renderer.remoteCursors = []
+      for (const [uid, c] of cursors) {
+        if (uid === myId) continue // don't show own cursor
+        const user = users.find(u => u.id === uid)
+        arr.push({
+          userId: uid,
+          col: c.col,
+          row: c.row,
+          name: user?.name || 'Unknown',
+          color: user?.color || '#89b4fa'
+        })
+      }
+      renderer.remoteCursors = arr
+      if (arr.length > 0) renderer.markDirty()
+    })
+
+    // Throttled cursor broadcast for collaboration
+    let lastCursorBroadcast = 0
+    function broadcastCursor(col: number, row: number) {
+      const now = Date.now()
+      if (now - lastCursorBroadcast < 100) return // max ~10Hz
+      lastCursorBroadcast = now
+      if (!collabClient.isConnected()) return
+      const map = getMap()
+      if (!map) return
+      collabClient.sendCursor(col, row, map.activeLayerId)
+    }
 
     function resizeCanvas() {
       const dpr = window.devicePixelRatio || 1
@@ -1547,6 +1583,7 @@
         renderer.hoverCol = col
         renderer.hoverRow = row
         setHover(col, row)
+        broadcastCursor(col, row)
 
         // Tile placement preview (holo)
         const tool = getActiveTool()
@@ -2158,6 +2195,7 @@
       unsub()
       unsubSel()
       unsubSketch()
+      unsubCollab()
       resizeObserver.disconnect()
       renderer.destroy()
       canvasEl.removeEventListener('pointerdown', handlePointerDown)
@@ -2180,6 +2218,7 @@
 <div class="canvas-wrapper" class:drawing-active={isDrawingLayerActive} bind:this={containerEl}>
   <canvas bind:this={canvasEl}></canvas>
   <SketchToolbar />
+  <CollabOverlay />
 </div>
 
 {#if showCanvasContextMenu}
@@ -2285,7 +2324,7 @@
     {/if}
     <div class="ctx-separator"></div>
     <button class="ctx-item" onclick={openPresetNameDialogFromObjects}>
-      <span class="ctx-icon">📦</span> Als Preset speichern
+      <span class="ctx-icon">📦</span> Save as Preset
     </button>
   </div>
 {/if}
@@ -2294,8 +2333,8 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="fill-confirm-overlay" onkeydown={(e) => { if (e.key === 'Escape') cancelPresetNameDialog(); if (e.key === 'Enter') savePresetFromSelection() }}>
     <div class="fill-confirm-dialog">
-      <h3>Preset speichern</h3>
-      <p>Name für das Preset:</p>
+      <h3>Save Preset</h3>
+      <p>Name for the preset:</p>
       <input
         bind:this={presetNameInputRef}
         class="preset-name-input"
@@ -2305,8 +2344,8 @@
         use:focusOnMount
       />
       <div class="fill-confirm-buttons">
-        <button class="cancel-btn" onclick={cancelPresetNameDialog}>Abbrechen</button>
-        <button class="confirm-btn" onclick={savePresetFromSelection}>Speichern</button>
+        <button class="cancel-btn" onclick={cancelPresetNameDialog}>Cancel</button>
+        <button class="confirm-btn" onclick={savePresetFromSelection}>Save</button>
       </div>
     </div>
   </div>

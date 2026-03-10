@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers'
+import { registerCollabHandlers } from './collab-server'
 import { createAppMenu } from './menu'
 import { initUpdater } from './updater'
 
@@ -61,6 +62,7 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   registerIpcHandlers()
+  registerCollabHandlers()
   createAppMenu()
 
   ipcMain.handle('app:getVersion', () => app.getVersion())

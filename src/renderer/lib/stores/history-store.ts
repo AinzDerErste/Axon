@@ -6,6 +6,8 @@ class HistoryManager {
   redoStack: Command[] = []
   maxSize: number = 100
   private listeners: Array<() => void> = []
+  /** Hook called after every local command for collab broadcast */
+  collabBroadcastHook: ((cmd: Command) => void) | null = null
 
   subscribe(fn: () => void): () => void {
     this.listeners.push(fn)
@@ -27,6 +29,7 @@ class HistoryManager {
     if (this.undoStack.length > this.maxSize) this.undoStack.shift()
     this.redoStack = []
     this.notify()
+    if (this.collabBroadcastHook) this.collabBroadcastHook(cmd)
   }
 
   /** Execute a command and push it to the stack */

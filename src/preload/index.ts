@@ -66,6 +66,45 @@ const electronAPI = {
   },
   onUpdateError: (callback: (message: string) => void) => {
     ipcRenderer.on('updater:error', (_event, message) => callback(message))
+  },
+
+  // Collaboration API
+  collabStartServer: (port: number) =>
+    ipcRenderer.invoke('collab:startServer', port) as Promise<{ success: boolean; port?: number; error?: string }>,
+  collabStopServer: () =>
+    ipcRenderer.invoke('collab:stopServer') as Promise<{ success: boolean }>,
+  collabIsServerRunning: () =>
+    ipcRenderer.invoke('collab:isServerRunning') as Promise<boolean>,
+  collabSetSnapshot: (snapshot: string) =>
+    ipcRenderer.invoke('collab:setSnapshot', snapshot),
+  collabSetHostUser: (userId: string) =>
+    ipcRenderer.invoke('collab:setHostUser', userId),
+  collabGetUsers: () =>
+    ipcRenderer.invoke('collab:getUsers') as Promise<{ id: string; name: string; color: string }[]>,
+  collabBroadcastOp: (msg: any) =>
+    ipcRenderer.invoke('collab:broadcastOp', msg),
+  onCollabUserJoined: (callback: (user: { id: string; name: string; color: string }) => void) => {
+    ipcRenderer.on('collab:user-joined', (_event, user) => callback(user))
+  },
+  onCollabUserLeft: (callback: (info: { id: string }) => void) => {
+    ipcRenderer.on('collab:user-left', (_event, info) => callback(info))
+  },
+  onCollabMessage: (callback: (msg: any) => void) => {
+    ipcRenderer.on('collab:message', (_event, msg) => callback(msg))
+  },
+  onCollabError: (callback: (error: string) => void) => {
+    ipcRenderer.on('collab:error', (_event, error) => callback(error))
+  },
+
+  // Snapshot API
+  collabCreateSnapshot: (name: string, data: string) =>
+    ipcRenderer.invoke('collab:createSnapshot', name, data) as Promise<{ id: string; name: string; ts: number }>,
+  collabListSnapshots: () =>
+    ipcRenderer.invoke('collab:listSnapshots') as Promise<{ id: string; name: string; ts: number }[]>,
+  collabRestoreSnapshot: (snapshotId: string) =>
+    ipcRenderer.invoke('collab:restoreSnapshot', snapshotId) as Promise<{ success: boolean; error?: string }>,
+  onCollabSnapshotRestored: (callback: (data: string) => void) => {
+    ipcRenderer.on('collab:snapshot-restored', (_event, data) => callback(data))
   }
 }
 

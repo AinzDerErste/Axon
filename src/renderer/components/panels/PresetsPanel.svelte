@@ -108,7 +108,7 @@
       <input
         type="text"
         class="search-input"
-        placeholder="Suche..."
+        placeholder="Search..."
         bind:value={searchQuery}
         onkeydown={(e) => { if (e.key === 'Escape') searchQuery = '' }}
       />
@@ -122,8 +122,8 @@
     {#if presets.length === 0}
       <div class="empty-state">
         <span class="empty-icon">📦</span>
-        <span class="empty-text">Keine Presets gespeichert</span>
-        <span class="empty-hint">Wähle Tiles aus und speichere sie als Preset</span>
+        <span class="empty-text">No presets saved</span>
+        <span class="empty-hint">Select tiles and save them as a preset</span>
       </div>
     {:else if viewMode === 'grid'}
       <div class="preset-grid">
@@ -154,7 +154,7 @@
             {:else}
               <span class="preset-name">{preset.name}</span>
             {/if}
-            <button class="remove-btn" title="Löschen" onclick={(e) => { e.stopPropagation(); handleDelete(preset.id) }}>×</button>
+            <button class="remove-btn" title="Delete" onclick={(e) => { e.stopPropagation(); handleDelete(preset.id) }}>×</button>
           </div>
         {/each}
       </div>
@@ -186,7 +186,7 @@
             {:else}
               <span class="preset-list-name">{preset.name}</span>
             {/if}
-            <button class="remove-btn" title="Löschen" onclick={(e) => { e.stopPropagation(); handleDelete(preset.id) }}>×</button>
+            <button class="remove-btn" title="Delete" onclick={(e) => { e.stopPropagation(); handleDelete(preset.id) }}>×</button>
           </div>
         {/each}
       </div>

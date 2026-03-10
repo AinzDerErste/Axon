@@ -38,7 +38,7 @@
           <path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/>
         </svg>
         <div class="toast-text">
-          <span class="toast-title">GPU Beschleunigung aktiv</span>
+          <span class="toast-title">GPU Acceleration Active</span>
           {#if gpuName}
             <span class="toast-sub">{gpuName}</span>
           {/if}
@@ -51,7 +51,7 @@
           <line x1="16" y1="8" x2="8" y2="16"/>
         </svg>
         <div class="toast-text">
-          <span class="toast-title">CPU Modus (keine GPU Beschleunigung)</span>
+          <span class="toast-title">CPU Mode (No GPU Acceleration)</span>
         </div>
       {/if}
     </div>

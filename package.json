@@ -17,6 +17,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@tsconfig/svelte": "^5.0.8",
+    "@types/ws": "^8.18.1",
     "electron": "^40.7.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
@@ -24,6 +25,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "ws": "^8.19.0"
   }
 }

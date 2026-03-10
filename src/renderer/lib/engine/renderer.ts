@@ -4,7 +4,7 @@ import type { TileRef } from '../models/tile'
 import type { Tileset } from '../models/tileset'
 import { Camera } from './camera'
 import { drawGrid, drawGridLinesFullMap, drawBoundary, drawHoverHighlight } from './grid-renderer'
-import { mapToScreen } from './iso-math'
+import { mapToScreen, screenToMap } from './iso-math'
 import { getVisibleRange } from './viewport'
 import { getBitmap } from '../stores/image-cache'
 
@@ -103,6 +103,9 @@ export class MapRenderer {
   sketchStrokeWidth: number = 3
   sketchFill: boolean = false
 
+  /** Remote user cursors from collaboration (set externally by MapCanvas) */
+  remoteCursors: { userId: string; col: number; row: number; name: string; color: string }[] = []
+
   /** Tileset index for O(1) lookup by ID (rebuilt per frame) */
   private tilesetIndex: Map<string, Tileset> = new Map()
 
@@ -113,8 +116,21 @@ export class MapRenderer {
   private tileCaches = new Map<string, { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; valid: boolean }>()
   private tileCacheBounds: { x: number; y: number; w: number; h: number } | null = null
   private gridCache: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; valid: boolean } | null = null
+  /** World bounds for large maps that exceed single-canvas cache limits */
+  private tileWorldBounds: { x: number; y: number; w: number; h: number } | null = null
+  /** Chunked tile caches for large maps: layerId → chunkKey → entry */
+  private tileChunkCaches = new Map<string, Map<string, { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; valid: boolean }>>()
+  /** Object/drawing layer cache: world-space OffscreenCanvas per layer */
+  private objectCaches = new Map<string, {
+    canvas: OffscreenCanvas
+    ctx: OffscreenCanvasRenderingContext2D
+    bounds: { x: number; y: number; w: number; h: number }
+    key: string
+  }>()
   private lastCfgKey = ''
   private static readonly MAX_CACHE_DIM = 16384
+  private static readonly CHUNK_SIZE = 4096
+  private static readonly MAX_CHUNKS_PER_LAYER = 48
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!
@@ -140,14 +156,19 @@ export class MapRenderer {
   destroy(): void {
     cancelAnimationFrame(this.animFrameId)
     this.tileCaches.clear()
+    this.tileChunkCaches.clear()
+    this.objectCaches.clear()
     this.tileCacheBounds = null
+    this.tileWorldBounds = null
     this.gridCache = null
   }
 
   /** Recompute tile cache world-space bounds. Disables caching for maps exceeding GPU limits. */
   private updateTileCacheBounds(): void {
     this.tileCaches.clear()
+    this.tileChunkCaches.clear()
     this.tileCacheBounds = null
+    this.tileWorldBounds = null
     this.gridCache = null
     if (!this.map) return
 
@@ -177,9 +198,13 @@ export class MapRenderer {
 
     const w = Math.ceil(maxX - minX)
     const h = Math.ceil(maxY - minY)
-    if (w <= 0 || h <= 0 || w > MapRenderer.MAX_CACHE_DIM || h > MapRenderer.MAX_CACHE_DIM) return
+    if (w <= 0 || h <= 0) return
 
-    this.tileCacheBounds = { x: Math.floor(minX), y: Math.floor(minY), w, h }
+    if (w <= MapRenderer.MAX_CACHE_DIM && h <= MapRenderer.MAX_CACHE_DIM) {
+      this.tileCacheBounds = { x: Math.floor(minX), y: Math.floor(minY), w, h }
+    } else {
+      this.tileWorldBounds = { x: Math.floor(minX), y: Math.floor(minY), w, h }
+    }
   }
 
   /** Render all tiles of a layer into its offscreen cache canvas */
@@ -230,15 +255,178 @@ export class MapRenderer {
     ctx.restore()
   }
 
+  /** Render tiles of a layer into a single chunk's offscreen cache canvas */
+  private renderTileChunkToCache(
+    entry: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D },
+    layer: TileLayer,
+    chunkX: number, chunkY: number, chunkW: number, chunkH: number
+  ): void {
+    const { config } = this.map!
+    const ctx = entry.ctx
+    const orientation = config.orientation || 'diamond'
+
+    ctx.clearRect(0, 0, chunkW, chunkH)
+    ctx.save()
+    ctx.translate(-chunkX, -chunkY)
+
+    // Determine grid cell range that can contribute tiles to this chunk
+    const corners = [
+      screenToMap(chunkX, chunkY, config.tileWidth, config.tileHeight, orientation),
+      screenToMap(chunkX + chunkW, chunkY, config.tileWidth, config.tileHeight, orientation),
+      screenToMap(chunkX, chunkY + chunkH, config.tileWidth, config.tileHeight, orientation),
+      screenToMap(chunkX + chunkW, chunkY + chunkH, config.tileWidth, config.tileHeight, orientation),
+    ]
+
+    // Extra padding for oversized tiles
+    let maxTileW = config.tileWidth, maxTileH = config.tileHeight
+    for (const ts of this.map!.tilesets) {
+      for (const t of ts.tiles) {
+        if (t.width > maxTileW) maxTileW = t.width
+        if (t.height > maxTileH) maxTileH = t.height
+      }
+    }
+    const pad = Math.max(3, Math.ceil(maxTileW / config.tileWidth) + 1, Math.ceil(maxTileH / config.tileHeight) + 1)
+
+    const minCol = Math.max(0, Math.min(corners[0].col, corners[1].col, corners[2].col, corners[3].col) - pad)
+    const maxCol = Math.min(config.gridWidth - 1, Math.max(corners[0].col, corners[1].col, corners[2].col, corners[3].col) + pad)
+    const minRow = Math.max(0, Math.min(corners[0].row, corners[1].row, corners[2].row, corners[3].row) - pad)
+    const maxRow = Math.min(config.gridHeight - 1, Math.max(corners[0].row, corners[1].row, corners[2].row, corners[3].row) + pad)
+
+    const order = config.renderOrder || 'right-down'
+    const rowStart = order.includes('up') ? maxRow : minRow
+    const rowEnd   = order.includes('up') ? minRow - 1 : maxRow + 1
+    const rowStep  = order.includes('up') ? -1 : 1
+    const colStart = order.includes('left') ? maxCol : minCol
+    const colEnd   = order.includes('left') ? minCol - 1 : maxCol + 1
+    const colStep  = order.includes('left') ? -1 : 1
+
+    for (let row = rowStart; row !== rowEnd; row += rowStep) {
+      for (let col = colStart; col !== colEnd; col += colStep) {
+        const tileRef = layer.data[row]?.[col]
+        if (!tileRef) continue
+
+        const tileset = this.tilesetIndex.get(tileRef.tilesetId)
+        if (!tileset || !bmp(tileset)) continue
+
+        const tileEntry = tileset.tiles[tileRef.tileIndex]
+        if (!tileEntry) continue
+
+        const screen = mapToScreen(col, row, config.tileWidth, config.tileHeight, orientation)
+
+        ctx.drawImage(
+          bmp(tileset)!,
+          tileEntry.x, tileEntry.y,
+          tileEntry.width, tileEntry.height,
+          screen.x - tileEntry.width / 2,
+          screen.y + config.tileHeight - tileEntry.height,
+          tileEntry.width, tileEntry.height
+        )
+      }
+    }
+
+    ctx.restore()
+  }
+
+  /** Draw a tile layer using chunked caching (for maps exceeding single-canvas limits).
+   *  Returns true if rendered, false if too many chunks visible (caller should try direct). */
+  private drawTileLayerChunked(ctx: CanvasRenderingContext2D, layer: TileLayer): boolean {
+    if (!this.map || !this.tileWorldBounds) return false
+
+    const CS = MapRenderer.CHUNK_SIZE
+    const wb = this.tileWorldBounds
+
+    // Determine visible world rect from camera
+    const vp = this.getViewportSize()
+    const tl = this.camera.screenToWorld(0, 0)
+    const br = this.camera.screenToWorld(vp.width, vp.height)
+
+    // Chunk grid range that overlaps the viewport
+    const totalChunkCols = Math.ceil(wb.w / CS)
+    const totalChunkRows = Math.ceil(wb.h / CS)
+    const cMinCol = Math.max(0, Math.floor((tl.wx - wb.x) / CS))
+    const cMinRow = Math.max(0, Math.floor((tl.wy - wb.y) / CS))
+    const cMaxCol = Math.min(totalChunkCols - 1, Math.floor((br.wx - wb.x) / CS))
+    const cMaxRow = Math.min(totalChunkRows - 1, Math.floor((br.wy - wb.y) / CS))
+
+    if (cMinCol > cMaxCol || cMinRow > cMaxRow) return true
+
+    const visibleChunkCount = (cMaxCol - cMinCol + 1) * (cMaxRow - cMinRow + 1)
+
+    // Too many visible chunks (extreme zoom-out) → let caller try direct rendering
+    if (visibleChunkCount > MapRenderer.MAX_CHUNKS_PER_LAYER) return false
+
+    // Get or create layer chunk map
+    let layerChunks = this.tileChunkCaches.get(layer.id)
+    if (!layerChunks) {
+      layerChunks = new Map()
+      this.tileChunkCaches.set(layer.id, layerChunks)
+    }
+
+    // Render and composite visible chunks
+    for (let cr = cMinRow; cr <= cMaxRow; cr++) {
+      for (let cc = cMinCol; cc <= cMaxCol; cc++) {
+        const chunkKey = `${cc}_${cr}`
+        let entry = layerChunks.get(chunkKey)
+
+        const chunkX = wb.x + cc * CS
+        const chunkY = wb.y + cr * CS
+        const chunkW = Math.min(CS, wb.x + wb.w - chunkX)
+        const chunkH = Math.min(CS, wb.y + wb.h - chunkY)
+
+        if (!entry) {
+          const canvas = new OffscreenCanvas(chunkW, chunkH)
+          entry = { canvas, ctx: canvas.getContext('2d')!, valid: false }
+          layerChunks.set(chunkKey, entry)
+        }
+
+        if (!entry.valid) {
+          this.renderTileChunkToCache(entry, layer, chunkX, chunkY, chunkW, chunkH)
+          entry.valid = true
+        }
+
+        ctx.drawImage(entry.canvas, chunkX, chunkY)
+      }
+    }
+
+    // Evict old chunks if too many cached
+    if (layerChunks.size > MapRenderer.MAX_CHUNKS_PER_LAYER * 2) {
+      for (const [key] of layerChunks) {
+        const parts = key.split('_')
+        const cc = parseInt(parts[0]), cr = parseInt(parts[1])
+        if (cc < cMinCol || cc > cMaxCol || cr < cMinRow || cr > cMaxRow) {
+          layerChunks.delete(key)
+        }
+      }
+    }
+
+    return true
+  }
+
   /** Invalidate tile layer caches. Call when tile data changes. */
   invalidateTileCaches(layerId?: string): void {
     if (layerId) {
       const entry = this.tileCaches.get(layerId)
       if (entry) entry.valid = false
+      const chunks = this.tileChunkCaches.get(layerId)
+      if (chunks) {
+        for (const chunk of chunks.values()) chunk.valid = false
+      }
     } else {
       for (const entry of this.tileCaches.values()) {
         entry.valid = false
       }
+      for (const chunks of this.tileChunkCaches.values()) {
+        for (const chunk of chunks.values()) chunk.valid = false
+      }
+    }
+  }
+
+  /** Invalidate object/drawing layer caches. Call when objects change. */
+  invalidateObjectCaches(layerId?: string): void {
+    if (layerId) {
+      this.objectCaches.delete(layerId)
+    } else {
+      this.objectCaches.clear()
     }
   }
 
@@ -266,14 +454,12 @@ export class MapRenderer {
       return
     }
 
-    // Rebuild tileset index for O(1) lookup this frame
-    this.tilesetIndex.clear()
-    for (const ts of map.tilesets) this.tilesetIndex.set(ts.id, ts)
-
-    // Detect map config changes → recompute tile cache bounds
-    const cfgKey = `${map.config.gridWidth}:${map.config.gridHeight}:${map.config.tileWidth}:${map.config.tileHeight}:${map.config.orientation || 'diamond'}:${map.tilesets.length}`
+    // Detect map config changes → recompute tile cache bounds + tileset index
+    const cfgKey = `${map.config.gridWidth}:${map.config.gridHeight}:${map.config.tileWidth}:${map.config.tileHeight}:${map.config.orientation || 'diamond'}:${map.tilesets.length}:${map.tilesets.map(t => t.id).join(',')}`
     if (cfgKey !== this.lastCfgKey) {
       this.lastCfgKey = cfgKey
+      this.tilesetIndex.clear()
+      for (const ts of map.tilesets) this.tilesetIndex.set(ts.id, ts)
       this.updateTileCacheBounds()
     }
 
@@ -341,6 +527,11 @@ export class MapRenderer {
       } else {
         drawGrid(ctx, map.config, this.hoverCol, this.hoverRow, camera.zoom, visibleRange)
       }
+    }
+
+    // Draw remote collaboration cursors
+    if (this.remoteCursors.length > 0) {
+      this.drawRemoteCursors(ctx)
     }
 
     // Draw marquee selection rectangle
@@ -444,7 +635,13 @@ export class MapRenderer {
       return
     }
 
-    // ── Direct rendering fallback (very large maps that exceed cache limits) ──
+    // ── Chunked caching for very large maps ──
+    if (this.tileWorldBounds) {
+      if (this.drawTileLayerChunked(ctx, layer)) return
+      // Fall through to direct rendering if too many chunks visible
+    }
+
+    // ── Direct rendering fallback (very large maps at extreme zoom-out) ──
     const visibleCols = range.maxCol - range.minCol + 1
     const visibleRows = range.maxRow - range.minRow + 1
     if (visibleCols * visibleRows > MapRenderer.MAX_VISIBLE_CELLS) {
@@ -515,22 +712,96 @@ export class MapRenderer {
     return sorted
   }
 
-  private drawObjectLayer(ctx: CanvasRenderingContext2D, layer: ObjectLayer): void {
-    // Draw zones first (below objects)
-    for (const zone of layer.zones) {
-      this.drawZone(ctx, zone)
+  /** Compute AABB for all visible objects in a layer */
+  private computeObjectBounds(objects: MapObject[]): { x: number; y: number; w: number; h: number } | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const obj of objects) {
+      if (obj.visible === false) continue
+      if (!bmp(obj)) continue
+      if (obj.rotation) {
+        const corners = this.getObjectCorners(obj)
+        for (const c of corners) {
+          if (c.x < minX) minX = c.x
+          if (c.y < minY) minY = c.y
+          if (c.x > maxX) maxX = c.x
+          if (c.y > maxY) maxY = c.y
+        }
+      } else {
+        if (obj.x < minX) minX = obj.x
+        if (obj.y < minY) minY = obj.y
+        if (obj.x + obj.width > maxX) maxX = obj.x + obj.width
+        if (obj.y + obj.height > maxY) maxY = obj.y + obj.height
+      }
+    }
+    if (!isFinite(minX)) return null
+    const pad = 2
+    const w = Math.ceil(maxX - minX) + pad * 2
+    const h = Math.ceil(maxY - minY) + pad * 2
+    if (w <= 0 || h <= 0 || w > MapRenderer.MAX_CACHE_DIM || h > MapRenderer.MAX_CACHE_DIM) return null
+    return { x: Math.floor(minX) - pad, y: Math.floor(minY) - pad, w, h }
+  }
+
+  /** Render object images (without selection highlights) into a cache canvas */
+  private renderObjectsToCache(
+    entry: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D; bounds: { x: number; y: number; w: number; h: number } },
+    objects: MapObject[]
+  ): void {
+    const { ctx, bounds } = entry
+    ctx.clearRect(0, 0, bounds.w, bounds.h)
+    ctx.save()
+    ctx.translate(-bounds.x, -bounds.y)
+    this.drawObjectsDirect(ctx, objects)
+    ctx.restore()
+  }
+
+  /** Build a lightweight cache key from object render state */
+  private buildObjectCacheKey(objects: MapObject[]): string {
+    let key = `${objects.length}:`
+    for (const o of objects) {
+      key += `${o.id},${o.x},${o.y},${o.width},${o.height},${o.rotation || 0},${o.flipX ? 1 : 0},${o.flipY ? 1 : 0},${o.visible !== false ? 1 : 0},${o.imageHash || ''};`
+    }
+    return key
+  }
+
+  /** Draw objects using cached OffscreenCanvas when possible */
+  private drawObjectsCached(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, layerId: string, objects: MapObject[]): void {
+    if (objects.length === 0) return
+
+    const key = this.buildObjectCacheKey(objects)
+    let entry = this.objectCaches.get(layerId)
+
+    if (entry && entry.key === key) {
+      // Cache hit — composite directly
+      ctx.drawImage(entry.canvas, entry.bounds.x, entry.bounds.y)
+      return
     }
 
-    // Draw paths (below objects, above zones)
-    for (const path of (layer.paths || [])) {
-      this.drawPath(ctx, layer, path)
+    // Cache miss — recompute
+    const bounds = this.computeObjectBounds(objects)
+    if (!bounds) {
+      // Exceeds cache limit or no visible objects — draw directly
+      this.drawObjectsDirect(ctx, objects)
+      return
     }
 
-    // Determine draw order based on layer sort mode
-    const objectsToDraw = this.getSortedObjects(layer)
+    if (!entry) {
+      const canvas = new OffscreenCanvas(bounds.w, bounds.h)
+      entry = { canvas, ctx: canvas.getContext('2d')!, bounds, key }
+      this.objectCaches.set(layerId, entry)
+    } else {
+      entry.bounds = bounds
+      entry.key = key
+      entry.canvas.width = bounds.w
+      entry.canvas.height = bounds.h
+    }
 
-    // Draw objects in order
-    for (const obj of objectsToDraw) {
+    this.renderObjectsToCache(entry, objects)
+    ctx.drawImage(entry.canvas, entry.bounds.x, entry.bounds.y)
+  }
+
+  /** Draw object images directly (no caching) */
+  private drawObjectsDirect(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, objects: MapObject[]): void {
+    for (const obj of objects) {
       if (!bmp(obj)) continue
       if (obj.visible === false) continue
 
@@ -550,47 +821,69 @@ export class MapRenderer {
       } else {
         ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
       }
+    }
+  }
 
-      // Highlight selected object
-      if (this.selectedObjectIds.has(obj.id)) {
-        if (hasRotation) {
-          const corners = this.getObjectCorners(obj)
-          ctx.strokeStyle = '#89b4fa'
-          ctx.lineWidth = 2
-          ctx.setLineDash([6, 3])
-          ctx.beginPath()
-          ctx.moveTo(corners[0].x, corners[0].y)
-          for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y)
-          ctx.closePath()
-          ctx.stroke()
-          ctx.setLineDash([])
+  /** Draw selection highlights for selected objects (always per-frame, not cached) */
+  private drawObjectSelections(ctx: CanvasRenderingContext2D, objects: MapObject[]): void {
+    for (const obj of objects) {
+      if (!this.selectedObjectIds.has(obj.id)) continue
 
-          const handleSize = 6
-          ctx.fillStyle = '#89b4fa'
-          for (const c of corners) {
-            ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize)
-          }
-        } else {
-          ctx.strokeStyle = '#89b4fa'
-          ctx.lineWidth = 2
-          ctx.setLineDash([6, 3])
-          ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
-          ctx.setLineDash([])
+      const rot = (obj.rotation || 0) * Math.PI / 180
+      if (rot !== 0) {
+        const corners = this.getObjectCorners(obj)
+        ctx.strokeStyle = '#89b4fa'
+        ctx.lineWidth = 2
+        ctx.setLineDash([6, 3])
+        ctx.beginPath()
+        ctx.moveTo(corners[0].x, corners[0].y)
+        for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y)
+        ctx.closePath()
+        ctx.stroke()
+        ctx.setLineDash([])
 
-          const handleSize = 6
-          ctx.fillStyle = '#89b4fa'
-          const corners = [
-            [obj.x, obj.y],
-            [obj.x + obj.width, obj.y],
-            [obj.x, obj.y + obj.height],
-            [obj.x + obj.width, obj.y + obj.height]
-          ]
-          for (const [cx, cy] of corners) {
-            ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize)
-          }
+        const handleSize = 6
+        ctx.fillStyle = '#89b4fa'
+        for (const c of corners) {
+          ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize)
+        }
+      } else {
+        ctx.strokeStyle = '#89b4fa'
+        ctx.lineWidth = 2
+        ctx.setLineDash([6, 3])
+        ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+        ctx.setLineDash([])
+
+        const handleSize = 6
+        ctx.fillStyle = '#89b4fa'
+        const corners = [
+          [obj.x, obj.y],
+          [obj.x + obj.width, obj.y],
+          [obj.x, obj.y + obj.height],
+          [obj.x + obj.width, obj.y + obj.height]
+        ]
+        for (const [cx, cy] of corners) {
+          ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize)
         }
       }
     }
+  }
+
+  private drawObjectLayer(ctx: CanvasRenderingContext2D, layer: ObjectLayer): void {
+    // Draw zones per-frame (zoom-dependent styling)
+    for (const zone of layer.zones) {
+      this.drawZone(ctx, zone)
+    }
+
+    // Draw paths per-frame (zoom-dependent styling)
+    for (const path of (layer.paths || [])) {
+      this.drawPath(ctx, layer, path)
+    }
+
+    // Draw objects (cached) + selection highlights (per-frame)
+    const objectsToDraw = this.getSortedObjects(layer)
+    this.drawObjectsCached(ctx, layer.id, objectsToDraw)
+    this.drawObjectSelections(ctx, objectsToDraw)
   }
 
   /** Compute the isometric transform coefficients for an image layer */
@@ -1148,65 +1441,55 @@ export class MapRenderer {
   }
 
   private drawDrawingLayer(ctx: CanvasRenderingContext2D, layer: DrawingLayer): void {
-    for (const obj of layer.objects) {
-      if (!bmp(obj)) continue
-      if (obj.visible === false) continue
+    this.drawObjectsCached(ctx, layer.id, layer.objects)
+    this.drawObjectSelections(ctx, layer.objects)
+  }
 
-      const rot = (obj.rotation || 0) * Math.PI / 180
-      const hasRotation = rot !== 0
-      const hasFlip = obj.flipX || obj.flipY
+  private drawRemoteCursors(ctx: CanvasRenderingContext2D): void {
+    if (!this.map) return
+    const { tileWidth, tileHeight, orientation, gridWidth, gridHeight } = this.map.config
+    const o = orientation || 'diamond'
+    const halfW = tileWidth / 2
+    const halfH = tileHeight / 2
+    const fontSize = Math.max(11, 11 / this.camera.zoom)
+    const lw = Math.max(2, 2 / this.camera.zoom)
 
-      if (hasRotation || hasFlip) {
-        ctx.save()
-        const cx = obj.x + obj.width / 2
-        const cy = obj.y + obj.height / 2
-        ctx.translate(cx, cy)
-        if (hasRotation) ctx.rotate(rot)
-        if (hasFlip) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1)
-        ctx.drawImage(bmp(obj)!, -obj.width / 2, -obj.height / 2, obj.width, obj.height)
-        ctx.restore()
-      } else {
-        ctx.drawImage(bmp(obj)!, obj.x, obj.y, obj.width, obj.height)
-      }
+    for (const cursor of this.remoteCursors) {
+      if (cursor.col < 0 || cursor.col >= gridWidth ||
+          cursor.row < 0 || cursor.row >= gridHeight) continue
 
-      if (this.selectedObjectIds.has(obj.id)) {
-        if (hasRotation) {
-          const corners = this.getObjectCorners(obj)
-          ctx.strokeStyle = '#89b4fa'
-          ctx.lineWidth = 2
-          ctx.setLineDash([6, 3])
-          ctx.beginPath()
-          ctx.moveTo(corners[0].x, corners[0].y)
-          for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y)
-          ctx.closePath()
-          ctx.stroke()
-          ctx.setLineDash([])
+      const top = mapToScreen(cursor.col, cursor.row, tileWidth, tileHeight, o)
 
-          const handleSize = 6
-          ctx.fillStyle = '#89b4fa'
-          for (const c of corners) {
-            ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize)
-          }
-        } else {
-          ctx.strokeStyle = '#89b4fa'
-          ctx.lineWidth = 2
-          ctx.setLineDash([6, 3])
-          ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
-          ctx.setLineDash([])
+      // Draw diamond cursor highlight
+      ctx.fillStyle = cursor.color + '30' // 19% alpha
+      ctx.strokeStyle = cursor.color
+      ctx.lineWidth = lw
+      ctx.beginPath()
+      ctx.moveTo(top.x, top.y)
+      ctx.lineTo(top.x + halfW, top.y + halfH)
+      ctx.lineTo(top.x, top.y + tileHeight)
+      ctx.lineTo(top.x - halfW, top.y + halfH)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
 
-          const handleSize = 6
-          ctx.fillStyle = '#89b4fa'
-          const corners = [
-            [obj.x, obj.y],
-            [obj.x + obj.width, obj.y],
-            [obj.x, obj.y + obj.height],
-            [obj.x + obj.width, obj.y + obj.height]
-          ]
-          for (const [cx, cy] of corners) {
-            ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize)
-          }
-        }
-      }
+      // Draw name label
+      ctx.font = `${fontSize}px -apple-system, sans-serif`
+      ctx.textAlign = 'center'
+      const labelY = top.y - 4 / this.camera.zoom
+      // Background for readability
+      const metrics = ctx.measureText(cursor.name)
+      const padX = 4 / this.camera.zoom
+      const padY = 2 / this.camera.zoom
+      ctx.fillStyle = 'rgba(30, 30, 46, 0.8)'
+      ctx.fillRect(
+        top.x - metrics.width / 2 - padX,
+        labelY - fontSize - padY,
+        metrics.width + padX * 2,
+        fontSize + padY * 2
+      )
+      ctx.fillStyle = cursor.color
+      ctx.fillText(cursor.name, top.x, labelY)
     }
   }
 
@@ -1503,3 +1786,4 @@ export class MapRenderer {
     return Math.sqrt((px - projX) ** 2 + (py - projY) ** 2)
   }
 }
+ 

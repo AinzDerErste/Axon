@@ -119,10 +119,10 @@
         <svg class="toast-icon ready" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"/>
         </svg>
-        <span class="toast-text">Update bereit</span>
+        <span class="toast-text">Update ready</span>
       </div>
       <div class="toast-actions">
-        <button class="toast-btn primary" onclick={handleInstall}>Neustarten</button>
+        <button class="toast-btn primary" onclick={handleInstall}>Restart</button>
         <button class="toast-btn dismiss" onclick={handleDismiss} title="Dismiss">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M2 2l8 8M10 2l-8 8"/>
@@ -137,7 +137,7 @@
           <line x1="15" y1="9" x2="9" y2="15"/>
           <line x1="9" y1="9" x2="15" y2="15"/>
         </svg>
-        <span class="toast-text">Update fehlgeschlagen</span>
+        <span class="toast-text">Update failed</span>
       </div>
 
     {:else if state === 'up-to-date'}
@@ -145,7 +145,7 @@
         <svg class="toast-icon ready" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"/>
         </svg>
-        <span class="toast-text">Axon ist aktuell</span>
+        <span class="toast-text">Axon is up to date</span>
       </div>
     {/if}
   </div>
