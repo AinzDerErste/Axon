@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.3.1-blue" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform" />
   <img src="https://img.shields.io/badge/electron-40.7-47848F" alt="Electron" />
   <img src="https://img.shields.io/badge/svelte-5-FF3E00" alt="Svelte" />
@@ -63,6 +63,28 @@ All keybindings are fully customizable via Settings.
 - Object grouping and depth sorting (auto or manual)
 - Search and filter within the library
 
+### Presets / Prefabs
+
+- Save reusable object arrangements and tile stamps as presets
+- Holographic preview before placement on the canvas
+- Preset library with search and categories
+
+### Path / Waypoint System
+
+- Draw patrol routes and movement paths on object layers
+- Add, move, and delete waypoints along a path
+- Visual path rendering with directional indicators
+
+### Real-Time Collaboration
+
+Axon includes a built-in multiplayer editing mode — no external server required.
+
+- **Host-Mode**: One client runs an embedded WebSocket server, others connect directly via IP
+- Real-time map sync via operation-based deltas (last-write-wins)
+- Remote cursor rendering with colored diamonds and name labels
+- In-overlay chat with message history
+- Snapshot system for the host to create and restore map states
+
 ### Export Formats
 
 | Format | Description |
@@ -79,6 +101,8 @@ All keybindings are fully customizable via Settings.
 - Configurable grid overlay (toggle with `Ctrl+G`)
 - Frustum culling for efficient rendering of large maps
 - Dirty-flag optimization — only redraws when changes occur
+- Tile layer caching, grid caching, and sort cache for large maps
+- GPU detection with automatic performance tuning
 
 ### Undo / Redo
 
@@ -161,10 +185,11 @@ npm run dist
 ```
 src/
 ├── main/              # Electron main process
-│   ├── index.ts       # App entry, window creation
-│   ├── ipc-handlers.ts# File I/O, dialogs
-│   ├── menu.ts        # Application menu
-│   └── updater.ts     # Auto-update logic
+│   ├── index.ts          # App entry, window creation
+│   ├── ipc-handlers.ts   # File I/O, dialogs
+│   ├── menu.ts           # Application menu
+│   ├── updater.ts        # Auto-update logic
+│   └── collab-server.ts  # WebSocket server for collaboration
 ├── preload/           # Context bridge (IPC API)
 │   └── index.ts
 └── renderer/          # Svelte frontend
@@ -174,11 +199,13 @@ src/
     │   ├── stores/    # State management (pub/sub pattern)
     │   ├── engine/    # Canvas renderer, camera, grid, viewport
     │   ├── commands/  # Undo/redo command pattern
+    │   ├── collab/    # Real-time collaboration (client, store, sync)
     │   └── export/    # PNG, JSON, TMX, Godot exporters
     └── components/
         ├── layout/    # TitleBar, Toolbar, Sidebar, StatusBar, UpdateToast
         ├── panels/    # LayerPanel, TilePalette, ObjectPanel, PropertiesPanel
         ├── canvas/    # MapCanvas
+        ├── collab/    # CollabOverlay, CollabPanel, ChatPanel, SnapshotPanel
         └── dialogs/   # NewMapDialog, MapPropertiesDialog, SettingsDialog
 ```
 
