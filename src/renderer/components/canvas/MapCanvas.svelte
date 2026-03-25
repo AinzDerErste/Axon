@@ -40,6 +40,7 @@
   import SketchToolbar from './SketchToolbar.svelte'
   import CollabOverlay from '../collab/CollabOverlay.svelte'
   import { collabStore } from '../../lib/collab/collab-store'
+  import { lockStore } from '../../lib/collab/lock-store'
   import * as collabClient from '../../lib/collab/collab-client'
 
   let canvasEl: HTMLCanvasElement
@@ -560,6 +561,9 @@
     })
     renderer.map = getMap()
 
+    // Track previously selected entity for collab lock release
+    let prevLockedEntity: { layerId: string; entityId: string } | null = null
+
     // Sync selection store → renderer highlight fields
     const unsubSel = selSubscribe(() => {
       const sel = getSelection()
@@ -571,6 +575,21 @@
       renderer.selectedZoneId = sel?.type === 'zone' ? sel.zoneId : null
       renderer.selectedPathId = sel?.type === 'path' ? sel.pathId : null
       renderer.selectedImageLayerId = sel?.type === 'image-layer' ? sel.layerId : null
+
+      // Release entity lock when deselecting
+      if (collabClient.isConnected()) {
+        const currentEntity = sel?.type === 'object'
+          ? { layerId: sel.layerId, entityId: sel.objectId }
+          : sel?.type === 'zone'
+            ? { layerId: sel.layerId, entityId: sel.zoneId }
+            : null
+        if (prevLockedEntity && (!currentEntity || currentEntity.entityId !== prevLockedEntity.entityId)) {
+          lockStore.releaseEntityLock(prevLockedEntity.layerId, prevLockedEntity.entityId)
+          collabClient.sendUnlock([], [prevLockedEntity])
+        }
+        prevLockedEntity = currentEntity
+      }
+
       renderer.markDirty()
     })
 
@@ -616,6 +635,53 @@
       if (!map) return
       collabClient.sendCursor(col, row, map.activeLayerId)
     }
+
+    // Throttled tile lock broadcast for collaboration (~10Hz)
+    let lockPendingTiles: { layerId: string; col: number; row: number }[] = []
+    let lastLockBroadcast = 0
+    function flushLockBroadcast() {
+      if (lockPendingTiles.length === 0) return
+      if (!collabClient.isConnected()) { lockPendingTiles = []; return }
+      const now = Date.now()
+      if (now - lastLockBroadcast < 100) return
+      lastLockBroadcast = now
+      const myId = collabClient.getUserId()
+      const myColor = collabClient.getUserColor()
+      lockStore.claimTileLocks(myId, myColor, lockPendingTiles)
+      collabClient.sendLock(lockPendingTiles, [])
+      lockPendingTiles = []
+    }
+
+    // Sync lock store → renderer
+    const unsubLocks = lockStore.subscribe(() => {
+      const myId = collabClient.getUserId()
+      const tiles = lockStore.getLockedTiles()
+      const arr: typeof renderer.lockedTiles = []
+      for (const [key, lock] of tiles) {
+        if (lock.userId === myId) continue
+        const colonIdx = key.indexOf(':')
+        const layerId = key.slice(0, colonIdx)
+        const coords = key.slice(colonIdx + 1)
+        const commaIdx = coords.indexOf(',')
+        const row = parseInt(coords.slice(0, commaIdx), 10)
+        const col = parseInt(coords.slice(commaIdx + 1), 10)
+        arr.push({ layerId, col, row, color: lock.color })
+      }
+      renderer.lockedTiles = arr
+
+      const entities = lockStore.getLockedEntities()
+      const entArr: typeof renderer.lockedEntities = []
+      for (const [key, lock] of entities) {
+        if (lock.userId === myId) continue
+        const colonIdx = key.indexOf(':')
+        const layerId = key.slice(0, colonIdx)
+        const entityId = key.slice(colonIdx + 1)
+        entArr.push({ layerId, entityId, color: lock.color })
+      }
+      renderer.lockedEntities = entArr
+
+      if (arr.length > 0 || entArr.length > 0) renderer.markDirty()
+    })
 
     function resizeCanvas() {
       const dpr = window.devicePixelRatio || 1
@@ -786,8 +852,18 @@
                 canvasEl.setPointerCapture(e.pointerId)
               }
             } else {
+              // Collab entity lock check
+              if (collabClient.isConnected()) {
+                const check = lockStore.isEntityLocked(hitResult.layerId, hitResult.obj.id, collabClient.getUserId())
+                if (check.locked) { renderer.markDirty(); return }
+              }
               selectObject(hitResult.layerId, hitResult.obj.id)
               setActiveLayer(hitResult.layerId)
+              // Broadcast entity lock
+              if (collabClient.isConnected()) {
+                lockStore.claimEntityLock(collabClient.getUserId(), collabClient.getUserColor(), hitResult.layerId, hitResult.obj.id)
+                collabClient.sendLock([], [{ layerId: hitResult.layerId, entityId: hitResult.obj.id }])
+              }
               if (!hitResult.obj.locked) {
                 isDraggingObject = true
                 dragObject = hitResult.obj
@@ -805,8 +881,17 @@
 
         const hitZone = renderer.hitTestZone(world.wx, world.wy)
         if (hitZone) {
+          // Collab entity lock check for zones
+          if (collabClient.isConnected()) {
+            const check = lockStore.isEntityLocked(hitZone.layerId, hitZone.zone.id, collabClient.getUserId())
+            if (check.locked) { renderer.markDirty(); return }
+          }
           selectZone(hitZone.layerId, hitZone.zone.id)
           setActiveLayer(hitZone.layerId)
+          if (collabClient.isConnected()) {
+            lockStore.claimEntityLock(collabClient.getUserId(), collabClient.getUserColor(), hitZone.layerId, hitZone.zone.id)
+            collabClient.sendLock([], [{ layerId: hitZone.layerId, entityId: hitZone.zone.id }])
+          }
           renderer.markDirty()
           return
         }
@@ -880,8 +965,17 @@
                 canvasEl.setPointerCapture(e.pointerId)
               }
             } else {
+              // Collab entity lock check
+              if (collabClient.isConnected()) {
+                const check = lockStore.isEntityLocked(hitResult.layerId, hitResult.obj.id, collabClient.getUserId())
+                if (check.locked) { renderer.markDirty(); return }
+              }
               selectObject(hitResult.layerId, hitResult.obj.id)
               setActiveLayer(hitResult.layerId)
+              if (collabClient.isConnected()) {
+                lockStore.claimEntityLock(collabClient.getUserId(), collabClient.getUserColor(), hitResult.layerId, hitResult.obj.id)
+                collabClient.sendLock([], [{ layerId: hitResult.layerId, entityId: hitResult.obj.id }])
+              }
               if (!hitResult.obj.locked) {
                 isDraggingObject = true
                 dragObject = hitResult.obj
@@ -899,8 +993,16 @@
 
         const hitZone = renderer.hitTestZone(world.wx, world.wy)
         if (hitZone) {
+          if (collabClient.isConnected()) {
+            const check = lockStore.isEntityLocked(hitZone.layerId, hitZone.zone.id, collabClient.getUserId())
+            if (check.locked) { renderer.markDirty(); return }
+          }
           selectZone(hitZone.layerId, hitZone.zone.id)
           setActiveLayer(hitZone.layerId)
+          if (collabClient.isConnected()) {
+            lockStore.claimEntityLock(collabClient.getUserId(), collabClient.getUserColor(), hitZone.layerId, hitZone.zone.id)
+            collabClient.sendLock([], [{ layerId: hitZone.layerId, entityId: hitZone.zone.id }])
+          }
           renderer.markDirty()
           return
         }
@@ -1091,23 +1193,43 @@
     function applyPaint(col: number, row: number, layer: any, tileRef: TileRef) {
       const key = `${col},${row}`
       if (paintedCells.has(key)) return
+      // Collab lock check
+      if (collabClient.isConnected()) {
+        const check = lockStore.isTileLocked(layer.id, col, row, collabClient.getUserId())
+        if (check.locked) return
+      }
       paintedCells.add(key)
       strokePositions.push({ row, col })
       strokePreviousTiles.push(layer.data[row][col] ? { ...layer.data[row][col]! } : null)
       layer.data[row][col] = { ...tileRef }
       renderer.invalidateTileCaches(layer.id)
       renderer.markDirty()
+      // Queue tile lock broadcast
+      if (collabClient.isConnected()) {
+        lockPendingTiles.push({ layerId: layer.id, col, row })
+        flushLockBroadcast()
+      }
     }
 
     function applyErase(col: number, row: number, layer: any) {
       const key = `${col},${row}`
       if (paintedCells.has(key)) return
+      // Collab lock check
+      if (collabClient.isConnected()) {
+        const check = lockStore.isTileLocked(layer.id, col, row, collabClient.getUserId())
+        if (check.locked) return
+      }
       paintedCells.add(key)
       strokePositions.push({ row, col })
       strokePreviousTiles.push(layer.data[row][col] ? { ...layer.data[row][col]! } : null)
       layer.data[row][col] = null
       renderer.invalidateTileCaches(layer.id)
       renderer.markDirty()
+      // Queue tile lock broadcast
+      if (collabClient.isConnected()) {
+        lockPendingTiles.push({ layerId: layer.id, col, row })
+        flushLockBroadcast()
+      }
     }
 
     async function rasterizeAndPlaceSketch() {
@@ -2196,6 +2318,7 @@
       unsubSel()
       unsubSketch()
       unsubCollab()
+      unsubLocks()
       resizeObserver.disconnect()
       renderer.destroy()
       canvasEl.removeEventListener('pointerdown', handlePointerDown)
