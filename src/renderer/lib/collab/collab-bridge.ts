@@ -11,12 +11,14 @@
 import { getHistory } from '../stores/history-store'
 import { getMap, setMap, notify as notifyMap, sanitizeConfig } from '../stores/map-store'
 import { collabStore } from './collab-store'
+import { lockStore } from './lock-store'
 import { commandToOp } from './op-serializer'
 import { applyRemoteOp } from './op-applier'
 import { registerImageSync } from '../stores/image-cache'
 import * as collabClient from './collab-client'
 
 let unsub: (() => void) | null = null
+let lockExpiryTimer: ReturnType<typeof setInterval> | null = null
 let cacheInvalidationCallback: ((opType: string, layerId: string) => void) | null = null
 let fullInvalidationCallback: (() => void) | null = null
 
@@ -33,6 +35,9 @@ export function startCollabBridge(
 
   cacheInvalidationCallback = onCacheInvalidate || null
   fullInvalidationCallback = onFullInvalidate || null
+
+  // Start lock expiry timer (cleans up stale tile locks every 200ms)
+  lockExpiryTimer = setInterval(() => lockStore.expireStale(), 200)
 
   // 1. Hook: local commands → network broadcast
   const history = getHistory()
@@ -64,6 +69,7 @@ export function startCollabBridge(
     // Check for incoming snapshot first (initial join or snapshot-restore)
     const snapshot = collabStore.consumeIncomingSnapshot()
     if (snapshot) {
+      lockStore.reset()
       loadCollabSnapshot(snapshot)
       return
     }
@@ -160,6 +166,12 @@ export function stopCollabBridge(): void {
   const history = getHistory()
   history.collabBroadcastHook = null
   cacheInvalidationCallback = null
+
+  if (lockExpiryTimer) {
+    clearInterval(lockExpiryTimer)
+    lockExpiryTimer = null
+  }
+  lockStore.reset()
 
   if (unsub) {
     unsub()
