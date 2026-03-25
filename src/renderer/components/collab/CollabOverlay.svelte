@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { collabStore } from '../../lib/collab/collab-store'
   import type { CollabUser, ChatMessage } from '../../lib/collab/collab-store'
+  import { lockStore } from '../../lib/collab/lock-store'
   import * as collabClient from '../../lib/collab/collab-client'
   import { startCollabBridge, stopCollabBridge } from '../../lib/collab/collab-bridge'
   import { getMap } from '../../lib/stores/map-store'
@@ -66,6 +67,26 @@
             ts: msg.ts,
             mapCoord: msg.payload.mapCoord
           })
+        } else if (msg.type === 'lock') {
+          const user = collabStore.getUsers().find(u => u.id === msg.sender)
+          const color = user?.color || '#89b4fa'
+          if (msg.payload.tiles?.length) {
+            lockStore.claimTileLocks(msg.sender, color, msg.payload.tiles)
+          }
+          if (msg.payload.entities?.length) {
+            for (const e of msg.payload.entities) {
+              lockStore.claimEntityLock(msg.sender, color, e.layerId, e.entityId)
+            }
+          }
+        } else if (msg.type === 'unlock') {
+          if (msg.payload.tiles?.length) {
+            lockStore.releaseTileLocks(msg.payload.tiles)
+          }
+          if (msg.payload.entities?.length) {
+            for (const e of msg.payload.entities) {
+              lockStore.releaseEntityLock(e.layerId, e.entityId)
+            }
+          }
         }
       })
     }
