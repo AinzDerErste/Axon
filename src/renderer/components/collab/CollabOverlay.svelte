@@ -22,6 +22,7 @@
   let hostPort = $state(7777)
   let joinAddress = $state('ws://localhost:7777')
   let userName = $state('Player')
+  let joinPassword = $state('')
 
   // ── Chat ──
   let messages = $state<ChatMessage[]>([])
@@ -145,7 +146,17 @@
   async function joinSession() {
     error = null
     collabStore.setRole('client')
-    collabClient.connect(joinAddress, userName)
+    collabClient.connect(joinAddress, userName, joinPassword || undefined)
+  }
+
+  function uploadMapToServer() {
+    const map = getMap()
+    if (!map) return
+    const json = JSON.stringify(map, (key, value) => {
+      if (key === 'imageBitmap') return undefined
+      return value
+    })
+    collabClient.sendUploadMap(json)
   }
 
   async function disconnect() {
@@ -290,6 +301,10 @@
               <span class="field-label">Address</span>
               <input type="text" class="input" bind:value={joinAddress} placeholder="ws://192.168.1.100:7777" />
             </div>
+            <div class="field">
+              <span class="field-label">Password</span>
+              <input type="password" class="input" bind:value={joinPassword} placeholder="Optional" />
+            </div>
             <button class="action-btn" onclick={joinSession}>Connect</button>
           {/if}
 
@@ -316,7 +331,10 @@
               </span>
             {/each}
           </div>
-          <button class="action-btn danger small" onclick={disconnect}>Disconnect</button>
+          <div class="action-row">
+            <button class="action-btn small" onclick={uploadMapToServer} title="Upload your current map to the server for others to see">Upload Map</button>
+            <button class="action-btn danger small" onclick={disconnect}>Disconnect</button>
+          </div>
         {/if}
 
         {#if error}
@@ -579,7 +597,8 @@
   .action-btn:hover { filter: brightness(1.15); }
   .action-btn.primary { background: var(--accent); color: var(--bg-primary); }
   .action-btn.danger { background: #f38ba8; color: var(--bg-primary); }
-  .action-btn.small { padding: 4px 0; font-size: 11px; }
+  .action-btn.small { padding: 4px 0; font-size: 11px; flex: 1; }
+  .action-row { display: flex; gap: 6px; }
 
   /* ── Connecting state ── */
   .center-status {

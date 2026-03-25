@@ -1,0 +1,18 @@
+{
+  "name": "axon-collab-server",
+  "version": "1.0.0",
+  "description": "Standalone collaboration server for Axon Map Editor",
+  "main": "collab-server.js",
+  "scripts": {
+    "start": "node collab-server.js",
+    "dev": "npx ts-node collab-server.ts"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3",
+    "ts-node": "^10.9.2"
+  }
+}

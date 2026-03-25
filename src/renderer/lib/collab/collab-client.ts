@@ -21,7 +21,7 @@ function randomColor(): string {
   return USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)]
 }
 
-export function connect(address: string, name: string): void {
+export function connect(address: string, name: string, password?: string): void {
   if (ws) disconnect()
 
   userId = generateUserId()
@@ -45,7 +45,7 @@ export function connect(address: string, name: string): void {
       type: 'join',
       sender: userId,
       ts: Date.now(),
-      payload: { name: userName, color: userColor }
+      payload: { name: userName, color: userColor, password }
     })
 
     // Start keepalive
@@ -115,6 +115,15 @@ export function sendCursor(col: number, row: number, layerId: string): void {
     sender: userId,
     ts: Date.now(),
     payload: { col, row, layerId }
+  })
+}
+
+export function sendUploadMap(mapDataJson: string): void {
+  send({
+    type: 'upload-map',
+    sender: userId,
+    ts: Date.now(),
+    payload: { mapData: mapDataJson }
   })
 }
 
@@ -195,6 +204,19 @@ function handleMessage(msg: CollabMessage): void {
         ts: msg.ts,
         mapCoord: msg.payload.mapCoord
       })
+      break
+    }
+
+    case 'snapshot-restore': {
+      if (msg.payload?.snapshotData) {
+        collabStore.setIncomingSnapshot(msg.payload.snapshotData)
+      }
+      break
+    }
+
+    case 'error': {
+      collabStore.setError(msg.payload?.message || 'Server error')
+      disconnect()
       break
     }
 

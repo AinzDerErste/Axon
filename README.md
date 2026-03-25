@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.1-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.4.0-blue" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform" />
   <img src="https://img.shields.io/badge/electron-40.7-47848F" alt="Electron" />
   <img src="https://img.shields.io/badge/svelte-5-FF3E00" alt="Svelte" />
@@ -77,13 +77,16 @@ All keybindings are fully customizable via Settings.
 
 ### Real-Time Collaboration
 
-Axon includes a built-in multiplayer editing mode — no external server required.
+Axon includes built-in multiplayer editing — work on maps together in real time.
 
 - **Host-Mode**: One client runs an embedded WebSocket server, others connect directly via IP
+- **Standalone Server**: Run a dedicated collab server on any machine (see below)
 - Real-time map sync via operation-based deltas (last-write-wins)
 - Remote cursor rendering with colored diamonds and name labels
 - In-overlay chat with message history
-- Snapshot system for the host to create and restore map states
+- Snapshot system to create and restore map states
+- Password protection for server access
+- Upload current map to share with connected clients
 
 ### Export Formats
 
@@ -180,6 +183,36 @@ npm run build
 npm run dist
 ```
 
+## Standalone Collaboration Server
+
+Axon ships with a standalone WebSocket server that can run on any machine (e.g., a VPS or LXC container). Your team connects via `ws://your-server:7777` (or `wss://` behind a reverse proxy).
+
+```bash
+cd server
+npm install
+
+# Start the server
+npx ts-node collab-server.ts --port 7777
+
+# With password protection
+npx ts-node collab-server.ts --port 7777 --password your-secret
+```
+
+### Reverse Proxy (Nginx Proxy Manager)
+
+To expose the server with SSL via a domain, add a proxy host in Nginx Proxy Manager:
+
+| Setting | Value |
+|---------|-------|
+| Domain | `collab.yourdomain.com` |
+| Scheme | `http` |
+| Forward IP | `127.0.0.1` (or container IP) |
+| Forward Port | `7777` |
+| Websocket Support | **ON** |
+| SSL | Let's Encrypt |
+
+Clients then connect to `wss://collab.yourdomain.com` in Axon.
+
 ## Project Structure
 
 ```
@@ -205,8 +238,12 @@ src/
         ├── layout/    # TitleBar, Toolbar, Sidebar, StatusBar, UpdateToast
         ├── panels/    # LayerPanel, TilePalette, ObjectPanel, PropertiesPanel
         ├── canvas/    # MapCanvas
-        ├── collab/    # CollabOverlay, CollabPanel, ChatPanel, SnapshotPanel
+        ├── collab/    # CollabOverlay (connection, chat, snapshots)
         └── dialogs/   # NewMapDialog, MapPropertiesDialog, SettingsDialog
+server/                # Standalone collaboration server
+├── collab-server.ts      # WebSocket server (Node.js)
+├── package.json
+└── tsconfig.json
 ```
 
 ## License

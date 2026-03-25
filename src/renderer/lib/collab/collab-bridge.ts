@@ -9,25 +9,30 @@
  */
 
 import { getHistory } from '../stores/history-store'
-import { getMap, notify as notifyMap } from '../stores/map-store'
+import { getMap, setMap, notify as notifyMap, sanitizeConfig } from '../stores/map-store'
 import { collabStore } from './collab-store'
 import { commandToOp } from './op-serializer'
 import { applyRemoteOp } from './op-applier'
+import { registerImageSync } from '../stores/image-cache'
 import * as collabClient from './collab-client'
 
 let unsub: (() => void) | null = null
 let cacheInvalidationCallback: ((opType: string, layerId: string) => void) | null = null
+let fullInvalidationCallback: (() => void) | null = null
 
 /**
  * Start the collab bridge. Call this when a collab session is established.
- * @param onCacheInvalidate Callback to invalidate renderer caches (tile/object)
+ * @param onCacheInvalidate Callback to invalidate renderer caches per-op
+ * @param onFullInvalidate Callback to fully invalidate all renderer caches (after snapshot load)
  */
 export function startCollabBridge(
-  onCacheInvalidate?: (opType: string, layerId: string) => void
+  onCacheInvalidate?: (opType: string, layerId: string) => void,
+  onFullInvalidate?: () => void
 ): void {
   stopCollabBridge()
 
   cacheInvalidationCallback = onCacheInvalidate || null
+  fullInvalidationCallback = onFullInvalidate || null
 
   // 1. Hook: local commands → network broadcast
   const history = getHistory()
@@ -54,8 +59,15 @@ export function startCollabBridge(
     }
   }
 
-  // 2. Subscribe to incoming ops from collab-store
+  // 2. Subscribe to incoming ops and snapshots from collab-store
   unsub = collabStore.subscribe(() => {
+    // Check for incoming snapshot first (initial join or snapshot-restore)
+    const snapshot = collabStore.consumeIncomingSnapshot()
+    if (snapshot) {
+      loadCollabSnapshot(snapshot)
+      return
+    }
+
     const map = getMap()
     if (!map) return
 
@@ -76,6 +88,69 @@ export function startCollabBridge(
       }
     }
   })
+}
+
+/**
+ * Load a full map snapshot received from the collab server.
+ */
+function loadCollabSnapshot(snapshotJson: string): void {
+  try {
+    const project = JSON.parse(snapshotJson)
+    if (!project.config || !project.layers) return
+
+    if (!project.config.orientation) project.config.orientation = 'diamond'
+    project.config = sanitizeConfig(project.config)
+
+    // Trim tile layers and ensure layer types
+    for (const layer of project.layers) {
+      if (!layer.type) layer.type = 'tile'
+      if (layer.type === 'tile' && Array.isArray(layer.data)) {
+        if (layer.data.length > project.config.gridHeight) {
+          layer.data.length = project.config.gridHeight
+        }
+        for (let r = 0; r < layer.data.length; r++) {
+          if (Array.isArray(layer.data[r]) && layer.data[r].length > project.config.gridWidth) {
+            layer.data[r].length = project.config.gridWidth
+          }
+        }
+      }
+      if (layer.type === 'object') {
+        if (!layer.zones) layer.zones = []
+        if (!layer.paths) layer.paths = []
+        if (!layer.groups) layer.groups = []
+        for (const zone of layer.zones) {
+          if (!zone.zoneType) zone.zoneType = 'zone'
+        }
+        // Register object images synchronously
+        for (const obj of layer.objects) {
+          if (obj.imageDataUrl) {
+            obj.imageHash = registerImageSync(obj.imageDataUrl)
+          }
+        }
+      }
+    }
+
+    // Register tileset images
+    for (const ts of project.tilesets) {
+      if (ts.imageDataUrl) {
+        ts.imageHash = registerImageSync(ts.imageDataUrl)
+      }
+    }
+
+    setMap({
+      config: project.config,
+      layers: project.layers,
+      tilesets: project.tilesets,
+      activeLayerId: project.activeLayerId
+    })
+
+    // Invalidate all renderer caches
+    if (fullInvalidationCallback) {
+      fullInvalidationCallback()
+    }
+  } catch (e) {
+    console.error('[collab-bridge] Failed to load snapshot:', e)
+  }
 }
 
 /**
