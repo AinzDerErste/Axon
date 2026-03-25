@@ -183,126 +183,109 @@
     }
   }
 
-  /** Defer heavy serialization so the saving overlay can render first */
-  function deferSerialize(): Promise<string> {
-    return new Promise(resolve => {
-      requestAnimationFrame(() => {
-        setTimeout(() => resolve(serializeProject()), 0)
-      })
-    })
+  /**
+   * Serialize the project in async chunks so the UI thread stays responsive.
+   * Large tile layers are serialized row-by-row with periodic yields.
+   */
+  async function deferSerialize(): Promise<string> {
+    // Wait one frame so the saving overlay can render
+    await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
+    return await serializeProjectAsync()
   }
 
-  async function handleSave() {
-    const map = getMap()
-    if (!map) return
-    if (!currentFilePath) { handleSaveAs(); return }
-    isSaving = true
-    try {
-      const data = await deferSerialize()
-      await window.electronAPI.writeFile(currentFilePath, data)
-      updateTitle(map.config.name)
-      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
-    } finally {
-      isSaving = false
-    }
+  /** Yield control to the browser every N rows to keep UI responsive */
+  function yieldToUI(): Promise<void> {
+    return new Promise(r => setTimeout(r, 0))
   }
 
-  async function handleSaveAs() {
-    const map = getMap()
-    if (!map) return
-    const path = await window.electronAPI.showSaveDialog({
-      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
-      defaultPath: map.config.name + '.axon'
-    })
-    if (!path) return
-    setCurrentFilePath(path)
-    isSaving = true
-    try {
-      const data = await deferSerialize()
-      await window.electronAPI.writeFile(path, data)
-      updateTitle(map.config.name)
-      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
-    } finally {
-      isSaving = false
-    }
-  }
-
-  async function handleOpen() {
-    const paths = await window.electronAPI.showOpenDialog({
-      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
-      properties: ['openFile']
-    })
-    if (!paths || paths.length === 0) return
-    setCurrentFilePath(paths[0])
-    const data = await window.electronAPI.readFile(currentFilePath!)
-    const project = JSON.parse(data)
-    await loadProject(project)
-  }
-
-  function serializeProject(): string {
+  async function serializeProjectAsync(): Promise<string> {
     const map = getMap()!
+    const ROWS_PER_CHUNK = 200
+
+    const serializedLayers: any[] = []
+    for (const l of map.layers) {
+      if (l.type === 'tile') {
+        // Serialize tile data in chunks to avoid blocking
+        const rows: any[] = []
+        for (let r = 0; r < l.data.length; r++) {
+          rows.push(l.data[r])
+          if (r > 0 && r % ROWS_PER_CHUNK === 0) {
+            await yieldToUI()
+          }
+        }
+        serializedLayers.push({
+          type: 'tile', id: l.id, name: l.name,
+          visible: l.visible, opacity: l.opacity, data: rows
+        })
+        continue
+      }
+      if (l.type === 'object') {
+        serializedLayers.push({
+          type: 'object',
+          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+          sortMode: l.sortMode || 'auto',
+          groups: (l.groups || []).map(g => ({
+            id: g.id, name: g.name, expanded: g.expanded ?? true
+          })),
+          objects: l.objects.map(o => ({
+            id: o.id, name: o.name,
+            imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            flipX: o.flipX || false, flipY: o.flipY || false,
+            rotation: o.rotation || 0,
+            locked: o.locked || false,
+            visible: o.visible !== false,
+            groupId: o.groupId || undefined
+          })),
+          zones: l.zones.map(z => ({
+            id: z.id, name: z.name, color: z.color,
+            points: z.points, closed: z.closed,
+            zoneType: z.zoneType || 'zone'
+          })),
+          paths: (l.paths || []).map(p => ({
+            id: p.id, name: p.name, color: p.color,
+            points: p.points, loop: p.loop,
+            assignedObjectId: p.assignedObjectId || undefined
+          }))
+        })
+        continue
+      }
+      if (l.type === 'drawing') {
+        serializedLayers.push({
+          type: 'drawing',
+          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+          objects: l.objects.map(o => ({
+            id: o.id, name: o.name,
+            imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            flipX: o.flipX || false, flipY: o.flipY || false,
+            rotation: o.rotation || 0,
+            locked: o.locked || false,
+            visible: o.visible !== false
+          }))
+        })
+        continue
+      }
+      if (l.type === 'image') {
+        serializedLayers.push({
+          type: 'image',
+          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+          imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
+          x: l.x, y: l.y, width: l.width, height: l.height,
+          isoTransform: l.isoTransform || false,
+          rotation: l.rotation || 0,
+          locked: l.locked || false
+        })
+        continue
+      }
+    }
+
+    await yieldToUI()
+
     return JSON.stringify({
       version: 1,
       config: map.config,
-      layers: map.layers.map(l => {
-        if (l.type === 'object') {
-          return {
-            type: 'object',
-            id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-            sortMode: l.sortMode || 'auto',
-            groups: (l.groups || []).map(g => ({
-              id: g.id, name: g.name, expanded: g.expanded ?? true
-            })),
-            objects: l.objects.map(o => ({
-              id: o.id, name: o.name,
-              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-              x: o.x, y: o.y, width: o.width, height: o.height,
-              flipX: o.flipX || false, flipY: o.flipY || false,
-              rotation: o.rotation || 0,
-              locked: o.locked || false,
-              visible: o.visible !== false,
-              groupId: o.groupId || undefined
-            })),
-            zones: l.zones.map(z => ({
-              id: z.id, name: z.name, color: z.color,
-              points: z.points, closed: z.closed,
-              zoneType: z.zoneType || 'zone'
-            })),
-            paths: (l.paths || []).map(p => ({
-              id: p.id, name: p.name, color: p.color,
-              points: p.points, loop: p.loop,
-              assignedObjectId: p.assignedObjectId || undefined
-            }))
-          }
-        }
-        if (l.type === 'drawing') {
-          return {
-            type: 'drawing',
-            id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-            objects: l.objects.map(o => ({
-              id: o.id, name: o.name,
-              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-              x: o.x, y: o.y, width: o.width, height: o.height,
-              flipX: o.flipX || false, flipY: o.flipY || false,
-              rotation: o.rotation || 0,
-              locked: o.locked || false,
-              visible: o.visible !== false
-            }))
-          }
-        }
-        if (l.type === 'image') {
-          return {
-            type: 'image',
-            id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-            imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
-            x: l.x, y: l.y, width: l.width, height: l.height,
-            isoTransform: l.isoTransform || false,
-            rotation: l.rotation || 0,
-            locked: l.locked || false
-          }
-        }
-        return { type: 'tile', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, data: l.data }
-      }),
+      layers: serializedLayers,
       tilesets: map.tilesets.map(ts => ({
         id: ts.id,
         name: ts.name,
@@ -318,6 +301,61 @@
       objectLibrary: serializeLibrary(),
       presets: serializePresets()
     })
+  }
+
+  let saveInProgress = false
+
+  async function handleSave() {
+    if (saveInProgress) return
+    const map = getMap()
+    if (!map) return
+    if (!currentFilePath) { handleSaveAs(); return }
+    saveInProgress = true
+    isSaving = true
+    try {
+      const data = await deferSerialize()
+      await window.electronAPI.writeFile(currentFilePath, data)
+      updateTitle(map.config.name)
+      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
+    } finally {
+      isSaving = false
+      saveInProgress = false
+    }
+  }
+
+  async function handleSaveAs() {
+    if (saveInProgress) return
+    const map = getMap()
+    if (!map) return
+    const path = await window.electronAPI.showSaveDialog({
+      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
+      defaultPath: map.config.name + '.axon'
+    })
+    if (!path) return
+    setCurrentFilePath(path)
+    saveInProgress = true
+    isSaving = true
+    try {
+      const data = await deferSerialize()
+      await window.electronAPI.writeFile(path, data)
+      updateTitle(map.config.name)
+      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
+    } finally {
+      isSaving = false
+      saveInProgress = false
+    }
+  }
+
+  async function handleOpen() {
+    const paths = await window.electronAPI.showOpenDialog({
+      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
+      properties: ['openFile']
+    })
+    if (!paths || paths.length === 0) return
+    setCurrentFilePath(paths[0])
+    const data = await window.electronAPI.readFile(currentFilePath!)
+    const project = JSON.parse(data)
+    await loadProject(project)
   }
 
   async function loadProject(project: any) {
