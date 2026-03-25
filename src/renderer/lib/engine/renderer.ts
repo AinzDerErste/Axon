@@ -106,6 +106,12 @@ export class MapRenderer {
   /** Remote user cursors from collaboration (set externally by MapCanvas) */
   remoteCursors: { userId: string; col: number; row: number; name: string; color: string }[] = []
 
+  /** Locked tiles from other users (set externally by MapCanvas) */
+  lockedTiles: { layerId: string; col: number; row: number; color: string }[] = []
+
+  /** Locked entities (objects/zones) from other users (set externally by MapCanvas) */
+  lockedEntities: { layerId: string; entityId: string; color: string }[] = []
+
   /** Tileset index for O(1) lookup by ID (rebuilt per frame) */
   private tilesetIndex: Map<string, Tileset> = new Map()
 
@@ -527,6 +533,11 @@ export class MapRenderer {
       } else {
         drawGrid(ctx, map.config, this.hoverCol, this.hoverRow, camera.zoom, visibleRange)
       }
+    }
+
+    // Draw collaboration lock overlays
+    if (this.lockedTiles.length > 0) {
+      this.drawLockedTiles(ctx)
     }
 
     // Draw remote collaboration cursors
@@ -1443,6 +1454,49 @@ export class MapRenderer {
   private drawDrawingLayer(ctx: CanvasRenderingContext2D, layer: DrawingLayer): void {
     this.drawObjectsCached(ctx, layer.id, layer.objects)
     this.drawObjectSelections(ctx, layer.objects)
+  }
+
+  private drawLockedTiles(ctx: CanvasRenderingContext2D): void {
+    if (!this.map) return
+    const { tileWidth, tileHeight, orientation, gridWidth, gridHeight } = this.map.config
+    const o = orientation || 'diamond'
+    const halfW = tileWidth / 2
+    const halfH = tileHeight / 2
+    const lw = Math.max(1.5, 1.5 / this.camera.zoom)
+
+    for (const tile of this.lockedTiles) {
+      if (tile.col < 0 || tile.col >= gridWidth ||
+          tile.row < 0 || tile.row >= gridHeight) continue
+
+      const top = mapToScreen(tile.col, tile.row, tileWidth, tileHeight, o)
+
+      // Diamond fill with user color at 15% opacity
+      ctx.fillStyle = tile.color + '26'
+      ctx.strokeStyle = tile.color + '66'
+      ctx.lineWidth = lw
+      ctx.beginPath()
+      ctx.moveTo(top.x, top.y)
+      ctx.lineTo(top.x + halfW, top.y + halfH)
+      ctx.lineTo(top.x, top.y + tileHeight)
+      ctx.lineTo(top.x - halfW, top.y + halfH)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+
+      // Diagonal stripe pattern for distinction from cursor hover
+      ctx.save()
+      ctx.clip()
+      ctx.strokeStyle = tile.color + '20'
+      ctx.lineWidth = Math.max(1, 1 / this.camera.zoom)
+      const step = Math.max(6, 6 / this.camera.zoom)
+      for (let d = -tileHeight; d < tileWidth + tileHeight; d += step) {
+        ctx.beginPath()
+        ctx.moveTo(top.x - halfW + d, top.y)
+        ctx.lineTo(top.x - halfW + d + tileHeight, top.y + tileHeight)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
   }
 
   private drawRemoteCursors(ctx: CanvasRenderingContext2D): void {
