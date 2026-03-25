@@ -13,6 +13,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: release
 
       - uses: actions/setup-node@v4
         with:
@@ -30,4 +32,40 @@ jobs:
         with:
           files: |
             dist/*.exe
-            dist/latest.yml
+
+      - name: Generate updates/latest.yml
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          SETUP="Axon-${VERSION}-setup.exe"
+          PORTABLE="Axon-${VERSION}-portable.exe"
+          SETUP_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${SETUP}"
+          PORTABLE_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${PORTABLE}"
+          SETUP_SHA=$(sha512sum "dist/${SETUP}" | awk '{print $1}' | xxd -r -p | base64 -w0)
+          PORTABLE_SHA=$(sha512sum "dist/${PORTABLE}" | awk '{print $1}' | xxd -r -p | base64 -w0)
+          SETUP_SIZE=$(stat -c%s "dist/${SETUP}")
+          PORTABLE_SIZE=$(stat -c%s "dist/${PORTABLE}")
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+          cat > updates/latest.yml << EOF
+          version: ${VERSION}
+          files:
+            - url: ${SETUP_URL}
+              sha512: ${SETUP_SHA}
+              size: ${SETUP_SIZE}
+            - url: ${PORTABLE_URL}
+              sha512: ${PORTABLE_SHA}
+              size: ${PORTABLE_SIZE}
+          path: ${SETUP_URL}
+          sha512: ${SETUP_SHA}
+          releaseDate: '${DATE}'
+          EOF
+          sed -i 's/^          //' updates/latest.yml
+
+      - name: Commit updated latest.yml
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updates/latest.yml
+          git commit -m "Update latest.yml for ${GITHUB_REF_NAME} release"
+          git push origin HEAD:release
