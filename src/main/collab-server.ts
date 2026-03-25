@@ -26,12 +26,20 @@ interface Snapshot {
   data: string // serialized MapData JSON
 }
 
+interface ActiveEntityLock {
+  userId: string
+  color: string
+  layerId: string
+  entityId: string
+}
+
 let wss: WebSocketServer | null = null
 let users: CollabUser[] = []
 let hostUserId: string | null = null
 let mapSnapshot: string | null = null // serialized MapData JSON from host
 let snapshots: Snapshot[] = []
 const MAX_SNAPSHOTS = 20
+let activeEntityLocks: ActiveEntityLock[] = []
 
 function broadcast(msg: CollabMessage, excludeId?: string): void {
   const data = JSON.stringify(msg)
@@ -89,7 +97,8 @@ function startServer(port: number): { port: number } {
           payload: {
             userId,
             users: userListPayload(),
-            snapshot: mapSnapshot
+            snapshot: mapSnapshot,
+            entityLocks: activeEntityLocks
           }
         }
         ws.send(JSON.stringify(welcome))
@@ -109,11 +118,36 @@ function startServer(port: number): { port: number } {
 
       if (!userId) return
 
-      // Forward ops, cursor, chat to all other clients
-      if (msg.type === 'op' || msg.type === 'cursor' || msg.type === 'chat') {
+      // Forward ops, cursor, chat, lock/unlock to all other clients
+      if (msg.type === 'op' || msg.type === 'cursor' || msg.type === 'chat'
+          || msg.type === 'lock' || msg.type === 'unlock') {
         broadcast(msg, userId)
         // Also forward to host renderer (so host sees remote changes)
         sendToRenderer('collab:message', msg)
+      }
+
+      // Track entity locks server-side for welcome payload
+      if (msg.type === 'lock' && msg.payload.entities?.length) {
+        const user = users.find(u => u.id === userId)
+        for (const e of msg.payload.entities) {
+          // Remove existing lock on this entity, then add new one
+          activeEntityLocks = activeEntityLocks.filter(
+            l => !(l.layerId === e.layerId && l.entityId === e.entityId)
+          )
+          activeEntityLocks.push({
+            userId: userId!,
+            color: user?.color || '#89b4fa',
+            layerId: e.layerId,
+            entityId: e.entityId
+          })
+        }
+      }
+      if (msg.type === 'unlock' && msg.payload.entities?.length) {
+        for (const e of msg.payload.entities) {
+          activeEntityLocks = activeEntityLocks.filter(
+            l => !(l.layerId === e.layerId && l.entityId === e.entityId)
+          )
+        }
       }
 
       if (msg.type === 'ping') {
@@ -123,6 +157,23 @@ function startServer(port: number): { port: number } {
 
     ws.on('close', () => {
       if (userId) {
+        // Release entity locks held by this user
+        const userLocks = activeEntityLocks.filter(l => l.userId === userId)
+        activeEntityLocks = activeEntityLocks.filter(l => l.userId !== userId)
+        if (userLocks.length > 0) {
+          const unlockMsg: CollabMessage = {
+            type: 'unlock',
+            sender: 'server',
+            ts: Date.now(),
+            payload: {
+              tiles: [],
+              entities: userLocks.map(l => ({ layerId: l.layerId, entityId: l.entityId }))
+            }
+          }
+          broadcast(unlockMsg)
+          sendToRenderer('collab:message', unlockMsg)
+        }
+
         users = users.filter(u => u.id !== userId)
         broadcast({
           type: 'user-left',
@@ -157,6 +208,7 @@ function stopServer(): void {
   hostUserId = null
   mapSnapshot = null
   snapshots = []
+  activeEntityLocks = []
   wss.close()
   wss = null
 }

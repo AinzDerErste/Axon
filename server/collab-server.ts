@@ -53,11 +53,19 @@ interface Snapshot {
 
 // ── State ──
 
+interface ActiveEntityLock {
+  userId: string
+  color: string
+  layerId: string
+  entityId: string
+}
+
 let users: CollabUser[] = []
 let mapSnapshot: string | null = null
 let snapshots: Snapshot[] = []
 const MAX_SNAPSHOTS = 20
 let opCount = 0
+let activeEntityLocks: ActiveEntityLock[] = []
 
 // ── Helpers ──
 
@@ -136,7 +144,8 @@ wss.on('connection', (ws, req) => {
         payload: {
           userId,
           users: userListPayload(),
-          snapshot: mapSnapshot
+          snapshot: mapSnapshot,
+          entityLocks: activeEntityLocks
         }
       }
       ws.send(JSON.stringify(welcome))
@@ -155,10 +164,34 @@ wss.on('connection', (ws, req) => {
 
     if (!userId) return
 
-    // ── Forward ops, cursors, chat ──
-    if (msg.type === 'op' || msg.type === 'cursor' || msg.type === 'chat') {
+    // ── Forward ops, cursors, chat, lock/unlock ──
+    if (msg.type === 'op' || msg.type === 'cursor' || msg.type === 'chat'
+        || msg.type === 'lock' || msg.type === 'unlock') {
       broadcast(msg, userId)
       if (msg.type === 'op') opCount++
+    }
+
+    // Track entity locks server-side for welcome payload
+    if (msg.type === 'lock' && msg.payload.entities?.length) {
+      const user = users.find(u => u.id === userId)
+      for (const e of msg.payload.entities) {
+        activeEntityLocks = activeEntityLocks.filter(
+          l => !(l.layerId === e.layerId && l.entityId === e.entityId)
+        )
+        activeEntityLocks.push({
+          userId: userId!,
+          color: user?.color || '#89b4fa',
+          layerId: e.layerId,
+          entityId: e.entityId
+        })
+      }
+    }
+    if (msg.type === 'unlock' && msg.payload.entities?.length) {
+      for (const e of msg.payload.entities) {
+        activeEntityLocks = activeEntityLocks.filter(
+          l => !(l.layerId === e.layerId && l.entityId === e.entityId)
+        )
+      }
     }
 
     // ── Upload map (client shares their map as the server state) ──
@@ -231,6 +264,21 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     if (userId) {
+      // Release entity locks held by this user
+      const userLocks = activeEntityLocks.filter(l => l.userId === userId)
+      activeEntityLocks = activeEntityLocks.filter(l => l.userId !== userId)
+      if (userLocks.length > 0) {
+        broadcast({
+          type: 'unlock',
+          sender: 'server',
+          ts: Date.now(),
+          payload: {
+            tiles: [],
+            entities: userLocks.map(l => ({ layerId: l.layerId, entityId: l.entityId }))
+          }
+        })
+      }
+
       const userName = users.find(u => u.id === userId)?.name || 'Unknown'
       users = users.filter(u => u.id !== userId)
       broadcast({
