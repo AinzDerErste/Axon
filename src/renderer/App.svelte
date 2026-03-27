@@ -327,15 +327,17 @@
     if (saveInProgress) return
     const map = getMap()
     if (!map) return
-    const path = await window.electronAPI.showSaveDialog({
-      filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
-      defaultPath: map.config.name + '.axon'
-    })
-    if (!path) return
-    setCurrentFilePath(path)
+    // Set the flag synchronously before the first await so that any concurrent
+    // save triggered while the dialog is open (e.g. rapid Ctrl+S) is blocked.
     saveInProgress = true
-    isSaving = true
     try {
+      const path = await window.electronAPI.showSaveDialog({
+        filters: [{ name: 'Axon Map Project', extensions: ['axon'] }],
+        defaultPath: map.config.name + '.axon'
+      })
+      if (!path) return
+      setCurrentFilePath(path)
+      isSaving = true
       const data = await deferSerialize()
       await window.electronAPI.writeFile(path, data)
       updateTitle(map.config.name)
