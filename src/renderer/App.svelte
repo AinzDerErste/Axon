@@ -171,15 +171,15 @@
     window.electronAPI?.setTitle(windowTitle)
   }
 
-  // Persist file path across HMR / page reloads via sessionStorage
-  let currentFilePath: string | null = sessionStorage.getItem('currentFilePath')
+  // Persist file path across HMR, page reloads, and app restarts via localStorage
+  let currentFilePath: string | null = localStorage.getItem('currentFilePath')
 
   function setCurrentFilePath(path: string | null) {
     currentFilePath = path
     if (path) {
-      sessionStorage.setItem('currentFilePath', path)
+      localStorage.setItem('currentFilePath', path)
     } else {
-      sessionStorage.removeItem('currentFilePath')
+      localStorage.removeItem('currentFilePath')
     }
   }
 
