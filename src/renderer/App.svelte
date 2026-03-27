@@ -309,7 +309,7 @@
     if (saveInProgress) return
     const map = getMap()
     if (!map) return
-    if (!currentFilePath) { handleSaveAs(); return }
+    if (!currentFilePath) { await handleSaveAs(); return }
     saveInProgress = true
     isSaving = true
     try {
@@ -317,6 +317,9 @@
       await window.electronAPI.writeFile(currentFilePath, data)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
+    } catch (err) {
+      console.error('[Axon] Save failed:', err)
+      alert(`Speichern fehlgeschlagen:\n${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isSaving = false
       saveInProgress = false
@@ -342,6 +345,9 @@
       await window.electronAPI.writeFile(path, data)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
+    } catch (err) {
+      console.error('[Axon] Save As failed:', err)
+      alert(`Speichern fehlgeschlagen:\n${err instanceof Error ? err.message : String(err)}`)
     } finally {
       isSaving = false
       saveInProgress = false
