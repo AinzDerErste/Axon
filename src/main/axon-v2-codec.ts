@@ -581,6 +581,63 @@ export function decodeAxonV2(buf: Buffer): any {
   }
 }
 
+// ── Section Extraction (for fast IPC transfer) ─────────────────────────────
+
+/**
+ * Extract and decompress v2 sections without full decode.
+ * Returns metadata JSON string + binary ArrayBuffers for fast IPC transfer.
+ */
+export function extractV2Sections(buf: Buffer): {
+  metadataJson: string
+  blobTable: ArrayBuffer
+  tileSections: { index: number; data: ArrayBuffer }[]
+} {
+  if (buf.subarray(0, 4).toString('ascii') !== 'AXON') {
+    throw new Error('Not a valid Axon v2 file')
+  }
+
+  const sectionCount = buf.readUInt16LE(6)
+  const sections: { type: number; offset: number; length: number }[] = []
+  let tableOffset = 8
+  for (let i = 0; i < sectionCount; i++) {
+    const type = buf.readUInt16LE(tableOffset); tableOffset += 2
+    const off = buf.readUInt32LE(tableOffset); tableOffset += 4
+    const len = buf.readUInt32LE(tableOffset); tableOffset += 4
+    sections.push({ type, offset: off, length: len })
+  }
+
+  function decompressSection(type: number): Buffer | null {
+    const s = sections.find(s => s.type === type)
+    if (!s) return null
+    return gunzipSync(buf.subarray(s.offset, s.offset + s.length))
+  }
+
+  // Metadata → JSON string (small, fast to transfer)
+  const metaBuf = decompressSection(SECTION_METADATA)
+  if (!metaBuf) throw new Error('Missing METADATA section')
+  const metadataJson = metaBuf.toString('utf-8')
+
+  // Blob table → ArrayBuffer (binary, efficient transfer)
+  const blobBuf = decompressSection(SECTION_IMAGE_BLOBS)
+  const blobTable = blobBuf
+    ? blobBuf.buffer.slice(blobBuf.byteOffset, blobBuf.byteOffset + blobBuf.byteLength)
+    : new ArrayBuffer(0)
+
+  // Tile sections → ArrayBuffers
+  const tileSections: { index: number; data: ArrayBuffer }[] = []
+  for (const s of sections) {
+    if (s.type >= SECTION_TILE_BASE) {
+      const raw = gunzipSync(buf.subarray(s.offset, s.offset + s.length))
+      tileSections.push({
+        index: s.type - SECTION_TILE_BASE,
+        data: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
+      })
+    }
+  }
+
+  return { metadataJson, blobTable, tileSections }
+}
+
 // ── Format Detection ─────────────────────────────────────────────────────────
 
 export function detectFormat(buf: Buffer): 1 | 2 {

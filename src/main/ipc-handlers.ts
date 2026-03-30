@@ -3,7 +3,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { readFile, writeFile, appendFile, mkdir, readdir, stat } from 'fs/promises'
 import { statSync } from 'fs'
-import { detectFormat, decodeAxonV2, encodeAxonV2 } from './axon-v2-codec'
+import { detectFormat, decodeAxonV2, encodeAxonV2, extractV2Sections } from './axon-v2-codec'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle('dialog:showOpen', async (_event, options) => {
@@ -47,10 +47,10 @@ export function registerIpcHandlers(): void {
     const buf = await readFile(filePath) // Buffer (no encoding — avoids V8 string limit)
     const readMs = Date.now() - t0
 
-    // v2 binary format — decode in main, then stringify to avoid slow structured clone
+    // v2 binary format — send decompressed sections as ArrayBuffers for fast IPC
     if (detectFormat(buf) === 2) {
-      const project = decodeAxonV2(buf)
-      return { __format: 'json', json: JSON.stringify(project), bytes: buf.length, readMs }
+      const sections = extractV2Sections(buf)
+      return { __format: 'v2-sections', sections, bytes: buf.length, readMs }
     }
 
     // v1 JSON: return raw string for renderer to parse (avoids slow structured clone
@@ -59,9 +59,13 @@ export function registerIpcHandlers(): void {
       return { __format: 'json', json: buf.toString('utf-8'), bytes: buf.length, readMs }
     }
 
-    // For very large v1 files: stream-parse the buffer, then stringify
+    // For very large v1 files: stream-parse the buffer, try stringify
     const project = parseProjectBuffer(buf)
-    return { __format: 'json', json: JSON.stringify(project), bytes: buf.length, readMs }
+    try {
+      return { __format: 'json', json: JSON.stringify(project), bytes: buf.length, readMs }
+    } catch {
+      return { __format: 'parsed', project, bytes: buf.length, readMs }
+    }
   })
 
   ipcMain.handle('file:write', async (_event, path: string, data: string) => {

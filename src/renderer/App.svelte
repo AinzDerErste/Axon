@@ -22,6 +22,7 @@
   import {
     registerImage, getDataUrl, clearAll as clearImageCache
   } from './lib/stores/image-cache'
+  import { reconstructFromSections } from './lib/axon-v2-decode'
   import {
     getSettings, subscribe as settingsSubscribe
   } from './lib/stores/settings-store'
@@ -130,12 +131,20 @@
           const result = await window.electronAPI.readProjectParsed(currentFilePath!)
           const tIpc = Math.round(performance.now() - t0)
           const tParseStart = performance.now()
-          const project = result.__format === 'json' ? JSON.parse(result.json) : result.project
+          let project: any
+          if (result.__format === 'v2-sections') {
+            project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+          } else if (result.__format === 'json') {
+            project = JSON.parse(result.json)
+          } else {
+            project = result.project
+          }
           const tParse = Math.round(performance.now() - tParseStart)
           const bytes = result.bytes || 0
+          const readMs = result.readMs || 0
           const timings = await loadProject(project)
           const ms = Math.round(performance.now() - t0)
-          window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, tParse, bytes, ...timings } }))
+          window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
         } catch (e) {
           console.error('Failed to restore project on reload:', e)
           setCurrentFilePath(null)
@@ -360,7 +369,14 @@
       const result = await window.electronAPI.readProjectParsed(currentFilePath!)
       const tIpc = Math.round(performance.now() - t0)
       const tParseStart = performance.now()
-      const project = result.__format === 'json' ? JSON.parse(result.json) : result.project
+      let project: any
+      if (result.__format === 'v2-sections') {
+        project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+      } else if (result.__format === 'json') {
+        project = JSON.parse(result.json)
+      } else {
+        project = result.project
+      }
       const tParse = Math.round(performance.now() - tParseStart)
       const bytes = result.bytes || 0
       const readMs = result.readMs || 0
