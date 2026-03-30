@@ -201,194 +201,89 @@
   }
 
   /**
-   * Write the project as JSON by appending chunks to disk so we never build one
-   * giant string (avoids V8 "Invalid string length" on large maps).
+   * Build the project object and save it in v2 binary format via the main process.
+   * Image dedup, RLE tile encoding, and gzip compression happen in the codec.
    */
-  async function serializeProjectToFile(filePath: string) {
+  async function saveProjectV2(filePath: string) {
     const map = getMap()!
-    const ROWS_PER_CHUNK = 200
-    const OBJECTS_PER_YIELD = 24
 
-    async function append(chunk: string) {
-      await window.electronAPI.saveProjectAppend(filePath, chunk)
+    function resolveImage(o: { imageHash?: string; imageDataUrl: string }): string {
+      return (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl
     }
 
-    await window.electronAPI.saveProjectInit(filePath)
-
-    await append('{"version":1,"config":')
-    await append(JSON.stringify(map.config))
-    await append(',"layers":[')
-
-    for (let li = 0; li < map.layers.length; li++) {
-      if (li > 0) await append(',')
-      const l = map.layers[li]
-
+    const layers = map.layers.map(l => {
       if (l.type === 'tile') {
-        await append('{"type":"tile"')
-        await append(`,"id":${JSON.stringify(l.id)},"name":${JSON.stringify(l.name)}`)
-        await append(`,"visible":${JSON.stringify(l.visible)},"opacity":${JSON.stringify(l.opacity)},"data":[`)
-        for (let r = 0; r < l.data.length; r++) {
-          if (r > 0) await append(',')
-          await append(JSON.stringify(l.data[r]))
-          if (r > 0 && r % ROWS_PER_CHUNK === 0) await yieldToUI()
-        }
-        await append(']}')
-        continue
+        return { type: 'tile', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, data: l.data }
       }
-
       if (l.type === 'object') {
-        const header = {
-          type: 'object' as const,
-          id: l.id,
-          name: l.name,
-          visible: l.visible,
-          opacity: l.opacity,
+        return {
+          type: 'object', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
           sortMode: l.sortMode || 'auto',
-          groups: (l.groups || []).map(g => ({
-            id: g.id,
-            name: g.name,
-            expanded: g.expanded ?? true
+          groups: (l.groups || []).map(g => ({ id: g.id, name: g.name, expanded: g.expanded ?? true })),
+          objects: l.objects.map(o => ({
+            id: o.id, name: o.name, imageDataUrl: resolveImage(o),
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            flipX: o.flipX || false, flipY: o.flipY || false,
+            rotation: o.rotation || 0, locked: o.locked || false,
+            visible: o.visible !== false, groupId: o.groupId || undefined
           })),
           zones: l.zones.map(z => ({
-            id: z.id,
-            name: z.name,
-            color: z.color,
-            points: z.points,
-            closed: z.closed,
-            zoneType: z.zoneType || 'zone'
+            id: z.id, name: z.name, color: z.color, points: z.points,
+            closed: z.closed, zoneType: z.zoneType || 'zone'
           })),
           paths: (l.paths || []).map(p => ({
-            id: p.id,
-            name: p.name,
-            color: p.color,
-            points: p.points,
-            loop: p.loop,
-            assignedObjectId: p.assignedObjectId || undefined
+            id: p.id, name: p.name, color: p.color, points: p.points,
+            loop: p.loop, assignedObjectId: p.assignedObjectId || undefined
           }))
         }
-        await append(JSON.stringify(header).slice(0, -1))
-        await append(',"objects":[')
-        for (let oi = 0; oi < l.objects.length; oi++) {
-          if (oi > 0) await append(',')
-          const o = l.objects[oi]
-          await append(
-            JSON.stringify({
-              id: o.id,
-              name: o.name,
-              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-              x: o.x,
-              y: o.y,
-              width: o.width,
-              height: o.height,
-              flipX: o.flipX || false,
-              flipY: o.flipY || false,
-              rotation: o.rotation || 0,
-              locked: o.locked || false,
-              visible: o.visible !== false,
-              groupId: o.groupId || undefined
-            })
-          )
-          if (oi > 0 && oi % OBJECTS_PER_YIELD === 0) await yieldToUI()
-        }
-        await append(']}')
-        continue
       }
-
       if (l.type === 'drawing') {
-        await append(
-          JSON.stringify({
-            type: 'drawing' as const,
-            id: l.id,
-            name: l.name,
-            visible: l.visible,
-            opacity: l.opacity
-          }).slice(0, -1)
-        )
-        await append(',"objects":[')
-        for (let oi = 0; oi < l.objects.length; oi++) {
-          if (oi > 0) await append(',')
-          const o = l.objects[oi]
-          await append(
-            JSON.stringify({
-              id: o.id,
-              name: o.name,
-              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-              x: o.x,
-              y: o.y,
-              width: o.width,
-              height: o.height,
-              flipX: o.flipX || false,
-              flipY: o.flipY || false,
-              rotation: o.rotation || 0,
-              locked: o.locked || false,
-              visible: o.visible !== false
-            })
-          )
-          if (oi > 0 && oi % OBJECTS_PER_YIELD === 0) await yieldToUI()
+        return {
+          type: 'drawing', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+          objects: l.objects.map(o => ({
+            id: o.id, name: o.name, imageDataUrl: resolveImage(o),
+            x: o.x, y: o.y, width: o.width, height: o.height,
+            flipX: o.flipX || false, flipY: o.flipY || false,
+            rotation: o.rotation || 0, locked: o.locked || false,
+            visible: o.visible !== false
+          }))
         }
-        await append(']}')
-        continue
       }
-
       if (l.type === 'image') {
-        await append(
-          JSON.stringify({
-            type: 'image' as const,
-            id: l.id,
-            name: l.name,
-            visible: l.visible,
-            opacity: l.opacity,
-            imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
-            x: l.x,
-            y: l.y,
-            width: l.width,
-            height: l.height,
-            isoTransform: l.isoTransform || false,
-            rotation: l.rotation || 0,
-            locked: l.locked || false
-          })
-        )
+        return {
+          type: 'image', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+          imageDataUrl: resolveImage(l),
+          x: l.x, y: l.y, width: l.width, height: l.height,
+          isoTransform: l.isoTransform || false, rotation: l.rotation || 0,
+          locked: l.locked || false
+        }
       }
+      return l
+    })
+
+    const tilesets = map.tilesets.map(ts => {
+      const out: Record<string, unknown> = {
+        id: ts.id, name: ts.name, tileWidth: ts.tileWidth, tileHeight: ts.tileHeight,
+        columns: ts.columns, tiles: ts.tiles
+      }
+      if (ts.sourcePath) out.sourcePath = ts.sourcePath
+      else out.imageDataUrl = resolveImage(ts)
+      return out
+    })
+
+    const project = {
+      version: 1,
+      config: map.config,
+      layers,
+      tilesets,
+      activeLayerId: map.activeLayerId,
+      camera: { x: 0, y: 0, zoom: 1 },
+      objectLibrary: serializeLibrary(),
+      presets: serializePresets()
     }
 
-    await append('],"tilesets":[')
-    for (let ti = 0; ti < map.tilesets.length; ti++) {
-      if (ti > 0) await append(',')
-      const ts = map.tilesets[ti]
-      const tsOut: Record<string, unknown> = {
-        id: ts.id,
-        name: ts.name,
-        tileWidth: ts.tileWidth,
-        tileHeight: ts.tileHeight,
-        columns: ts.columns,
-        tiles: ts.tiles
-      }
-      if (ts.sourcePath) {
-        tsOut.sourcePath = ts.sourcePath
-      } else {
-        tsOut.imageDataUrl = (ts.imageHash && getDataUrl(ts.imageHash)) || ts.imageDataUrl
-      }
-      await append(JSON.stringify(tsOut))
-      if (ti > 0 && ti % 8 === 0) await yieldToUI()
-    }
-
-    await append(`],"activeLayerId":${JSON.stringify(map.activeLayerId)}`)
-    await append(',"camera":{"x":0,"y":0,"zoom":1}')
-    await append(',"objectLibrary":[')
-    const lib = serializeLibrary()
-    for (let i = 0; i < lib.length; i++) {
-      if (i > 0) await append(',')
-      await append(JSON.stringify(lib[i]))
-      if (i > 0 && i % OBJECTS_PER_YIELD === 0) await yieldToUI()
-    }
-    await append('],"presets":[')
-    const presets = serializePresets()
-    for (let i = 0; i < presets.length; i++) {
-      if (i > 0) await append(',')
-      await append(JSON.stringify(presets[i]))
-      if (i > 0 && i % 8 === 0) await yieldToUI()
-    }
-    await append(']}')
+    const bytes = await window.electronAPI.saveProjectV2(filePath, project)
+    console.log(`[Axon] Saved v2: ${(bytes / 1024 / 1024).toFixed(1)} MB`)
   }
 
   let saveInProgress = false
@@ -402,7 +297,7 @@
     isSaving = true
     try {
       await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
-      await serializeProjectToFile(currentFilePath)
+      await saveProjectV2(currentFilePath)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
     } catch (err) {
@@ -430,7 +325,7 @@
       setCurrentFilePath(path)
       isSaving = true
       await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
-      await serializeProjectToFile(path)
+      await saveProjectV2(path)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
     } catch (err) {

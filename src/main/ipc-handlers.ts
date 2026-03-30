@@ -3,6 +3,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { readFile, writeFile, appendFile, mkdir, readdir, stat } from 'fs/promises'
 import { statSync } from 'fs'
+import { detectFormat, decodeAxonV2, encodeAxonV2 } from './axon-v2-codec'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle('dialog:showOpen', async (_event, options) => {
@@ -44,13 +45,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('file:readProjectParsed', async (_event, filePath: string) => {
     const buf = await readFile(filePath) // Buffer (no encoding — avoids V8 string limit)
 
-    // If under 400 MB, safe to convert to string + JSON.parse directly
+    // v2 binary format
+    if (detectFormat(buf) === 2) {
+      return decodeAxonV2(buf)
+    }
+
+    // v1 JSON format — if under 400 MB, safe to convert to string + JSON.parse
     if (buf.length < 400 * 1024 * 1024) {
       return JSON.parse(buf.toString('utf-8'))
     }
 
-    // For very large files: stream-parse the buffer without creating the full string.
-    // Main process blocks briefly but the renderer overlay is already visible.
+    // For very large v1 files: stream-parse the buffer
     return parseProjectBuffer(buf)
   })
 
@@ -71,6 +76,13 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('file:saveProjectAppend', async (_event, filePath: string, chunk: string) => {
     await appendFile(filePath, chunk, 'utf-8')
+  })
+
+  /** Save project in v2 binary format. Receives the full project object via IPC. */
+  ipcMain.handle('file:saveProjectV2', async (_event, filePath: string, project: any) => {
+    const buf = encodeAxonV2(project)
+    await writeFile(filePath, buf)
+    return buf.length
   })
 
   ipcMain.handle('file:readImages', async () => {

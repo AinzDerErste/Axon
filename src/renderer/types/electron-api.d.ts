@@ -7,6 +7,7 @@ interface ElectronAPI {
   writeFile(path: string, data: string): Promise<void>
   saveProjectInit(path: string): Promise<void>
   saveProjectAppend(path: string, chunk: string): Promise<void>
+  saveProjectV2(path: string, project: any): Promise<number>
   readImageFiles(): Promise<{ data: string; name: string }[]>
   readSpritesheetFile(): Promise<{ data: string; name: string } | undefined>
   setTitle(title: string): Promise<void>
