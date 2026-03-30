@@ -73,18 +73,14 @@ export function serializeLibrary(): SerializedObjectImage[] {
 
 /** Deserialize from project file (register images in central cache) */
 export async function deserializeLibrary(items: SerializedObjectImage[]): Promise<void> {
-  const result: ObjectImage[] = []
-  for (const item of items) {
-    const hash = await registerImage(item.imageDataUrl)
-    result.push({
-      name: item.name,
-      imageDataUrl: item.imageDataUrl,
-      imageBitmap: getBitmap(hash),
-      imageHash: hash,
-      width: item.width,
-      height: item.height
-    })
-  }
-  library = result
+  const hashes = await Promise.all(items.map(item => registerImage(item.imageDataUrl)))
+  library = items.map((item, i) => ({
+    name: item.name,
+    imageDataUrl: item.imageDataUrl,
+    imageBitmap: getBitmap(hashes[i]),
+    imageHash: hashes[i],
+    width: item.width,
+    height: item.height
+  }))
   notify()
 }
