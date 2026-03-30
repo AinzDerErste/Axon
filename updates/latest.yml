@@ -1,11 +1,11 @@
-version: 1.4.0
+version: 1.4.1
 files:
-  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.4.0/Axon-1.4.0-setup.exe
-    sha512: XqKdJgyIH5PBXVmYI2phfJxxKFuREp16yr2bqpsLlBj80QfGiKTbhZqF80ntktjZMs0Q47dxnd9YIj+uz7gslg==
-    size: 90340640
-  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.4.0/Axon-1.4.0-portable.exe
-    sha512: FP3eVF9awHXyOd4kEaRrutpVPTv6TJp+TmGroQoZtrHC712mO2leGL8zYeexFvW8Xbr4eMMdriyyXlG57fwJxw==
-    size: 90069285
-path: https://github.com/AinzDerErste/Axon/releases/download/v1.4.0/Axon-1.4.0-setup.exe
-sha512: XqKdJgyIH5PBXVmYI2phfJxxKFuREp16yr2bqpsLlBj80QfGiKTbhZqF80ntktjZMs0Q47dxnd9YIj+uz7gslg==
-releaseDate: '2026-03-25T21:15:59.000Z'
+  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.4.1/Axon-1.4.1-setup.exe
+    sha512: mU+Ro7psO4ML6KOhG7UGPkKNZ/CY2nfWsmV4hUjdW6hHz4UL8yDhFu6NtKmTxgODgZyVEvNGHu77G4SOFXwCvA==
+    size: 90348356
+  - url: https://github.com/AinzDerErste/Axon/releases/download/v1.4.1/Axon-1.4.1-portable.exe
+    sha512: dSNvh/vqm8Zuzmv2zS349g5lrkx1hODXZjSXbSL+QinD/kIo1hJLI2bznyyn8DarcLtmGuAuFB2Mw5AIGrO1ug==
+    size: 90076993
+path: https://github.com/AinzDerErste/Axon/releases/download/v1.4.1/Axon-1.4.1-setup.exe
+sha512: mU+Ro7psO4ML6KOhG7UGPkKNZ/CY2nfWsmV4hUjdW6hHz4UL8yDhFu6NtKmTxgODgZyVEvNGHu77G4SOFXwCvA==
+releaseDate: '2026-03-30T17:00:24.000Z'
