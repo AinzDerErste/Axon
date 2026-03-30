@@ -1,6 +1,6 @@
 {
   "name": "axon",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Axon",
   "productName": "Axon",
   "main": "./out/main/index.js",
