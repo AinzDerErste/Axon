@@ -26,13 +26,19 @@
     toastTimer = setTimeout(() => { toastVisible = false }, 2500)
   }
 
-  function showLoadToast(ms: number) {
-    const sec = (ms / 1000).toFixed(1)
-    toastMessage = `Project loaded in ${sec}s`
+  function showLoadToast(detail: any) {
+    const sec = (detail.ms / 1000).toFixed(1)
+    const parts = [`${sec}s`]
+    const mb = detail.bytes ? `${(detail.bytes / 1024 / 1024).toFixed(1)}MB` : ''
+    if (detail.readMs != null) parts.push(`read ${(detail.readMs / 1000).toFixed(1)}s`)
+    if (detail.tIpc != null) parts.push(`ipc ${(detail.tIpc / 1000).toFixed(1)}s`)
+    if (detail.tParse != null) parts.push(`parse ${(detail.tParse / 1000).toFixed(1)}s`)
+    if (detail.tImages != null) parts.push(`${detail.imgCount ?? '?'} imgs ${(detail.tImages / 1000).toFixed(1)}s`)
+    toastMessage = `Loaded ${mb}: ${parts.join(' | ')}`
     toastColor = '#89b4fa'
     toastVisible = true
     if (toastTimer) clearTimeout(toastTimer)
-    toastTimer = setTimeout(() => { toastVisible = false }, 3500)
+    toastTimer = setTimeout(() => { toastVisible = false }, 10000)
   }
 
   onMount(() => {
@@ -81,7 +87,7 @@
     })
 
     function handleProjectSaved() { showSaveToast() }
-    function handleProjectLoaded(e: Event) { showLoadToast((e as CustomEvent).detail.ms) }
+    function handleProjectLoaded(e: Event) { showLoadToast((e as CustomEvent).detail) }
     window.addEventListener('project-saved', handleProjectSaved)
     window.addEventListener('project-loaded', handleProjectLoaded)
 

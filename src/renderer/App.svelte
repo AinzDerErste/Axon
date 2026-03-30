@@ -127,10 +127,15 @@
         await yieldToUI()
         const t0 = performance.now()
         try {
-          const project = await window.electronAPI.readProjectParsed(currentFilePath!)
-          await loadProject(project)
+          const result = await window.electronAPI.readProjectParsed(currentFilePath!)
+          const tIpc = Math.round(performance.now() - t0)
+          const tParseStart = performance.now()
+          const project = result.__format === 'json' ? JSON.parse(result.json) : result.project
+          const tParse = Math.round(performance.now() - tParseStart)
+          const bytes = result.bytes || 0
+          const timings = await loadProject(project)
           const ms = Math.round(performance.now() - t0)
-          window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms } }))
+          window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, tParse, bytes, ...timings } }))
         } catch (e) {
           console.error('Failed to restore project on reload:', e)
           setCurrentFilePath(null)
@@ -352,10 +357,16 @@
     await yieldToUI()
     const t0 = performance.now()
     try {
-      const project = await window.electronAPI.readProjectParsed(currentFilePath!)
-      await loadProject(project)
+      const result = await window.electronAPI.readProjectParsed(currentFilePath!)
+      const tIpc = Math.round(performance.now() - t0)
+      const tParseStart = performance.now()
+      const project = result.__format === 'json' ? JSON.parse(result.json) : result.project
+      const tParse = Math.round(performance.now() - tParseStart)
+      const bytes = result.bytes || 0
+      const readMs = result.readMs || 0
+      const timings = await loadProject(project)
       const ms = Math.round(performance.now() - t0)
-      window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms } }))
+      window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
     } catch (err) {
       console.error('[Axon] Open failed:', err)
       alert(`Failed to open project:\n${err instanceof Error ? err.message : String(err)}`)
@@ -365,7 +376,7 @@
     }
   }
 
-  async function loadProject(project: any) {
+  async function loadProject(project: any): Promise<{ tImages: number; imgCount: number; tLib: number; tMap: number }> {
     // Clear previous project's image cache (closes all ImageBitmaps)
     clearImageCache()
 
@@ -451,14 +462,18 @@
     }
 
     // Wait for all image registrations to complete (tilesets + objects + library)
+    const tImgStart = performance.now()
     await Promise.all(imagePromises)
+    const tImages = Math.round(performance.now() - tImgStart)
 
     // Restore object library (bitmaps already cached, no extra decode)
+    const tLibStart = performance.now()
     if (project.objectLibrary && Array.isArray(project.objectLibrary)) {
       await deserializeLibrary(project.objectLibrary)
     } else {
       clearLibrary()
     }
+    const tLib = Math.round(performance.now() - tLibStart)
 
     // Restore presets
     if (project.presets && Array.isArray(project.presets)) {
@@ -467,13 +482,16 @@
       clearPresets()
     }
 
+    const tMapStart = performance.now()
     setMap({
       config: project.config,
       layers: project.layers,
       tilesets: project.tilesets,
       activeLayerId: project.activeLayerId
     })
+    const tMap = Math.round(performance.now() - tMapStart)
     updateTitle(project.config.name)
+    return { tImages, imgCount: imagePromises.length, tLib, tMap }
   }
 
   async function handleExportPng() {

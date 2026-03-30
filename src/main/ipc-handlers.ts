@@ -43,20 +43,25 @@ export function registerIpcHandlers(): void {
    * responsive during parsing of very large files.
    */
   ipcMain.handle('file:readProjectParsed', async (_event, filePath: string) => {
+    const t0 = Date.now()
     const buf = await readFile(filePath) // Buffer (no encoding — avoids V8 string limit)
+    const readMs = Date.now() - t0
 
-    // v2 binary format
+    // v2 binary format — decode in main, then stringify to avoid slow structured clone
     if (detectFormat(buf) === 2) {
-      return decodeAxonV2(buf)
+      const project = decodeAxonV2(buf)
+      return { __format: 'json', json: JSON.stringify(project), bytes: buf.length, readMs }
     }
 
-    // v1 JSON format — if under 400 MB, safe to convert to string + JSON.parse
+    // v1 JSON: return raw string for renderer to parse (avoids slow structured clone
+    // of deeply nested objects). Only parse in main for files > 400MB (V8 string limit).
     if (buf.length < 400 * 1024 * 1024) {
-      return JSON.parse(buf.toString('utf-8'))
+      return { __format: 'json', json: buf.toString('utf-8'), bytes: buf.length, readMs }
     }
 
-    // For very large v1 files: stream-parse the buffer
-    return parseProjectBuffer(buf)
+    // For very large v1 files: stream-parse the buffer, then stringify
+    const project = parseProjectBuffer(buf)
+    return { __format: 'json', json: JSON.stringify(project), bytes: buf.length, readMs }
   })
 
   ipcMain.handle('file:write', async (_event, path: string, data: string) => {
