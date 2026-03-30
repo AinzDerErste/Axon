@@ -13,8 +13,16 @@ const electronAPI = {
     ipcRenderer.invoke('dialog:showSave', options),
   readFile: (path: string) =>
     ipcRenderer.invoke('file:read', path),
+  readProjectParsed: (path: string) =>
+    ipcRenderer.invoke('file:readProjectParsed', path) as Promise<any>,
+  fileSize: (path: string) =>
+    ipcRenderer.invoke('file:size', path) as Promise<number>,
   writeFile: (path: string, data: string) =>
     ipcRenderer.invoke('file:write', path, data),
+  saveProjectInit: (path: string) =>
+    ipcRenderer.invoke('file:saveProjectInit', path),
+  saveProjectAppend: (path: string, chunk: string) =>
+    ipcRenderer.invoke('file:saveProjectAppend', path, chunk),
   ensureDir: (path: string) =>
     ipcRenderer.invoke('file:ensureDir', path),
   readImageFiles: () =>
