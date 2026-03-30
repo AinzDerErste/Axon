@@ -2,7 +2,11 @@ interface ElectronAPI {
   showOpenDialog(options: { filters?: { name: string; extensions: string[] }[]; properties?: string[] }): Promise<string[] | undefined>
   showSaveDialog(options: { filters?: { name: string; extensions: string[] }[]; defaultPath?: string }): Promise<string | undefined>
   readFile(path: string): Promise<string>
+  readProjectParsed(path: string): Promise<any>
+  fileSize(path: string): Promise<number>
   writeFile(path: string, data: string): Promise<void>
+  saveProjectInit(path: string): Promise<void>
+  saveProjectAppend(path: string, chunk: string): Promise<void>
   readImageFiles(): Promise<{ data: string; name: string }[]>
   readSpritesheetFile(): Promise<{ data: string; name: string } | undefined>
   setTitle(title: string): Promise<void>

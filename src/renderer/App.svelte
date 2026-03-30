@@ -32,6 +32,8 @@
   let showAboutDialog = $state(false)
   let windowTitle = $state('Axon')
   let isSaving = $state(false)
+  let isLoading = $state(false)
+  let loadingMessage = $state('Loading...')
 
   // Resizable sidebar
   const SIDEBAR_MIN = 200
@@ -119,17 +121,20 @@
 
     // Auto-reload project after page reload (Ctrl+R / HMR)
     if (currentFilePath && !getMap()) {
-      window.electronAPI.readFile(currentFilePath).then(async (data: string) => {
+      isLoading = true
+      loadingMessage = 'Reopening project...'
+      ;(async () => {
+        await yieldToUI()
         try {
-          const project = JSON.parse(data)
+          const project = await window.electronAPI.readProjectParsed(currentFilePath!)
           await loadProject(project)
         } catch (e) {
           console.error('Failed to restore project on reload:', e)
           setCurrentFilePath(null)
+        } finally {
+          isLoading = false
         }
-      }).catch(() => {
-        setCurrentFilePath(null)
-      })
+      })()
     }
 
     return () => {
@@ -183,124 +188,207 @@
     }
   }
 
-  /**
-   * Serialize the project in async chunks so the UI thread stays responsive.
-   * Large tile layers are serialized row-by-row with periodic yields.
-   */
-  async function deferSerialize(): Promise<string> {
-    // Wait one frame so the saving overlay can render
-    await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
-    return await serializeProjectAsync()
-  }
-
   /** Yield control to the browser every N rows to keep UI responsive */
   function yieldToUI(): Promise<void> {
     return new Promise(r => setTimeout(r, 0))
   }
 
-  async function serializeProjectAsync(): Promise<string> {
+  function formatSaveError(err: unknown): string {
+    if (err instanceof RangeError && err.message === 'Invalid string length') {
+      return 'Invalid string length — a single field (often one huge image or tile row) exceeds the maximum size. Try smaller assets, fewer embedded images, or link tilesets from a folder instead of pasting large images.'
+    }
+    return err instanceof Error ? err.message : String(err)
+  }
+
+  /**
+   * Write the project as JSON by appending chunks to disk so we never build one
+   * giant string (avoids V8 "Invalid string length" on large maps).
+   */
+  async function serializeProjectToFile(filePath: string) {
     const map = getMap()!
     const ROWS_PER_CHUNK = 200
+    const OBJECTS_PER_YIELD = 24
 
-    const serializedLayers: any[] = []
-    for (const l of map.layers) {
+    async function append(chunk: string) {
+      await window.electronAPI.saveProjectAppend(filePath, chunk)
+    }
+
+    await window.electronAPI.saveProjectInit(filePath)
+
+    await append('{"version":1,"config":')
+    await append(JSON.stringify(map.config))
+    await append(',"layers":[')
+
+    for (let li = 0; li < map.layers.length; li++) {
+      if (li > 0) await append(',')
+      const l = map.layers[li]
+
       if (l.type === 'tile') {
-        // Serialize tile data in chunks to avoid blocking
-        const rows: any[] = []
+        await append('{"type":"tile"')
+        await append(`,"id":${JSON.stringify(l.id)},"name":${JSON.stringify(l.name)}`)
+        await append(`,"visible":${JSON.stringify(l.visible)},"opacity":${JSON.stringify(l.opacity)},"data":[`)
         for (let r = 0; r < l.data.length; r++) {
-          rows.push(l.data[r])
-          if (r > 0 && r % ROWS_PER_CHUNK === 0) {
-            await yieldToUI()
-          }
+          if (r > 0) await append(',')
+          await append(JSON.stringify(l.data[r]))
+          if (r > 0 && r % ROWS_PER_CHUNK === 0) await yieldToUI()
         }
-        serializedLayers.push({
-          type: 'tile', id: l.id, name: l.name,
-          visible: l.visible, opacity: l.opacity, data: rows
-        })
+        await append(']}')
         continue
       }
+
       if (l.type === 'object') {
-        serializedLayers.push({
-          type: 'object',
-          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
+        const header = {
+          type: 'object' as const,
+          id: l.id,
+          name: l.name,
+          visible: l.visible,
+          opacity: l.opacity,
           sortMode: l.sortMode || 'auto',
           groups: (l.groups || []).map(g => ({
-            id: g.id, name: g.name, expanded: g.expanded ?? true
-          })),
-          objects: l.objects.map(o => ({
-            id: o.id, name: o.name,
-            imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-            x: o.x, y: o.y, width: o.width, height: o.height,
-            flipX: o.flipX || false, flipY: o.flipY || false,
-            rotation: o.rotation || 0,
-            locked: o.locked || false,
-            visible: o.visible !== false,
-            groupId: o.groupId || undefined
+            id: g.id,
+            name: g.name,
+            expanded: g.expanded ?? true
           })),
           zones: l.zones.map(z => ({
-            id: z.id, name: z.name, color: z.color,
-            points: z.points, closed: z.closed,
+            id: z.id,
+            name: z.name,
+            color: z.color,
+            points: z.points,
+            closed: z.closed,
             zoneType: z.zoneType || 'zone'
           })),
           paths: (l.paths || []).map(p => ({
-            id: p.id, name: p.name, color: p.color,
-            points: p.points, loop: p.loop,
+            id: p.id,
+            name: p.name,
+            color: p.color,
+            points: p.points,
+            loop: p.loop,
             assignedObjectId: p.assignedObjectId || undefined
           }))
-        })
+        }
+        await append(JSON.stringify(header).slice(0, -1))
+        await append(',"objects":[')
+        for (let oi = 0; oi < l.objects.length; oi++) {
+          if (oi > 0) await append(',')
+          const o = l.objects[oi]
+          await append(
+            JSON.stringify({
+              id: o.id,
+              name: o.name,
+              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
+              x: o.x,
+              y: o.y,
+              width: o.width,
+              height: o.height,
+              flipX: o.flipX || false,
+              flipY: o.flipY || false,
+              rotation: o.rotation || 0,
+              locked: o.locked || false,
+              visible: o.visible !== false,
+              groupId: o.groupId || undefined
+            })
+          )
+          if (oi > 0 && oi % OBJECTS_PER_YIELD === 0) await yieldToUI()
+        }
+        await append(']}')
         continue
       }
+
       if (l.type === 'drawing') {
-        serializedLayers.push({
-          type: 'drawing',
-          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-          objects: l.objects.map(o => ({
-            id: o.id, name: o.name,
-            imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
-            x: o.x, y: o.y, width: o.width, height: o.height,
-            flipX: o.flipX || false, flipY: o.flipY || false,
-            rotation: o.rotation || 0,
-            locked: o.locked || false,
-            visible: o.visible !== false
-          }))
-        })
+        await append(
+          JSON.stringify({
+            type: 'drawing' as const,
+            id: l.id,
+            name: l.name,
+            visible: l.visible,
+            opacity: l.opacity
+          }).slice(0, -1)
+        )
+        await append(',"objects":[')
+        for (let oi = 0; oi < l.objects.length; oi++) {
+          if (oi > 0) await append(',')
+          const o = l.objects[oi]
+          await append(
+            JSON.stringify({
+              id: o.id,
+              name: o.name,
+              imageDataUrl: (o.imageHash && getDataUrl(o.imageHash)) || o.imageDataUrl,
+              x: o.x,
+              y: o.y,
+              width: o.width,
+              height: o.height,
+              flipX: o.flipX || false,
+              flipY: o.flipY || false,
+              rotation: o.rotation || 0,
+              locked: o.locked || false,
+              visible: o.visible !== false
+            })
+          )
+          if (oi > 0 && oi % OBJECTS_PER_YIELD === 0) await yieldToUI()
+        }
+        await append(']}')
         continue
       }
+
       if (l.type === 'image') {
-        serializedLayers.push({
-          type: 'image',
-          id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
-          imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
-          x: l.x, y: l.y, width: l.width, height: l.height,
-          isoTransform: l.isoTransform || false,
-          rotation: l.rotation || 0,
-          locked: l.locked || false
-        })
-        continue
+        await append(
+          JSON.stringify({
+            type: 'image' as const,
+            id: l.id,
+            name: l.name,
+            visible: l.visible,
+            opacity: l.opacity,
+            imageDataUrl: (l.imageHash && getDataUrl(l.imageHash)) || l.imageDataUrl,
+            x: l.x,
+            y: l.y,
+            width: l.width,
+            height: l.height,
+            isoTransform: l.isoTransform || false,
+            rotation: l.rotation || 0,
+            locked: l.locked || false
+          })
+        )
       }
     }
 
-    await yieldToUI()
-
-    return JSON.stringify({
-      version: 1,
-      config: map.config,
-      layers: serializedLayers,
-      tilesets: map.tilesets.map(ts => ({
+    await append('],"tilesets":[')
+    for (let ti = 0; ti < map.tilesets.length; ti++) {
+      if (ti > 0) await append(',')
+      const ts = map.tilesets[ti]
+      const tsOut: Record<string, unknown> = {
         id: ts.id,
         name: ts.name,
-        imageDataUrl: (ts.imageHash && getDataUrl(ts.imageHash)) || ts.imageDataUrl,
         tileWidth: ts.tileWidth,
         tileHeight: ts.tileHeight,
         columns: ts.columns,
-        tiles: ts.tiles,
-        ...(ts.sourcePath ? { sourcePath: ts.sourcePath } : {})
-      })),
-      activeLayerId: map.activeLayerId,
-      camera: { x: 0, y: 0, zoom: 1 },
-      objectLibrary: serializeLibrary(),
-      presets: serializePresets()
-    })
+        tiles: ts.tiles
+      }
+      if (ts.sourcePath) {
+        tsOut.sourcePath = ts.sourcePath
+      } else {
+        tsOut.imageDataUrl = (ts.imageHash && getDataUrl(ts.imageHash)) || ts.imageDataUrl
+      }
+      await append(JSON.stringify(tsOut))
+      if (ti > 0 && ti % 8 === 0) await yieldToUI()
+    }
+
+    await append(`],"activeLayerId":${JSON.stringify(map.activeLayerId)}`)
+    await append(',"camera":{"x":0,"y":0,"zoom":1}')
+    await append(',"objectLibrary":[')
+    const lib = serializeLibrary()
+    for (let i = 0; i < lib.length; i++) {
+      if (i > 0) await append(',')
+      await append(JSON.stringify(lib[i]))
+      if (i > 0 && i % OBJECTS_PER_YIELD === 0) await yieldToUI()
+    }
+    await append('],"presets":[')
+    const presets = serializePresets()
+    for (let i = 0; i < presets.length; i++) {
+      if (i > 0) await append(',')
+      await append(JSON.stringify(presets[i]))
+      if (i > 0 && i % 8 === 0) await yieldToUI()
+    }
+    await append(']}')
   }
 
   let saveInProgress = false
@@ -313,13 +401,13 @@
     saveInProgress = true
     isSaving = true
     try {
-      const data = await deferSerialize()
-      await window.electronAPI.writeFile(currentFilePath, data)
+      await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
+      await serializeProjectToFile(currentFilePath)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
     } catch (err) {
       console.error('[Axon] Save failed:', err)
-      alert(`Speichern fehlgeschlagen:\n${err instanceof Error ? err.message : String(err)}`)
+      alert(`Save failed:\n${formatSaveError(err)}`)
     } finally {
       isSaving = false
       saveInProgress = false
@@ -341,13 +429,13 @@
       if (!path) return
       setCurrentFilePath(path)
       isSaving = true
-      const data = await deferSerialize()
-      await window.electronAPI.writeFile(path, data)
+      await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
+      await serializeProjectToFile(path)
       updateTitle(map.config.name)
       window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
     } catch (err) {
       console.error('[Axon] Save As failed:', err)
-      alert(`Speichern fehlgeschlagen:\n${err instanceof Error ? err.message : String(err)}`)
+      alert(`Save failed:\n${formatSaveError(err)}`)
     } finally {
       isSaving = false
       saveInProgress = false
@@ -361,9 +449,19 @@
     })
     if (!paths || paths.length === 0) return
     setCurrentFilePath(paths[0])
-    const data = await window.electronAPI.readFile(currentFilePath!)
-    const project = JSON.parse(data)
-    await loadProject(project)
+    isLoading = true
+    loadingMessage = 'Opening project...'
+    await yieldToUI()
+    try {
+      const project = await window.electronAPI.readProjectParsed(currentFilePath!)
+      await loadProject(project)
+    } catch (err) {
+      console.error('[Axon] Open failed:', err)
+      alert(`Failed to open project:\n${err instanceof Error ? err.message : String(err)}`)
+      setCurrentFilePath(null)
+    } finally {
+      isLoading = false
+    }
   }
 
   async function loadProject(project: any) {
@@ -373,9 +471,24 @@
     // Register all images in central cache in parallel
     const imagePromises: Promise<void>[] = []
 
-    // Tilesets
+    // Tilesets (inline data URL, or reload from linked file path)
     for (const ts of project.tilesets) {
-      imagePromises.push(registerImage(ts.imageDataUrl).then(h => { ts.imageHash = h }))
+      if (ts.imageDataUrl) {
+        imagePromises.push(registerImage(ts.imageDataUrl).then(h => { ts.imageHash = h }))
+      } else if (ts.sourcePath) {
+        imagePromises.push(
+          (async () => {
+            const result = await window.electronAPI.readImageFile(ts.sourcePath)
+            if (!result?.data) {
+              console.error('[Axon] Tileset image missing:', ts.sourcePath)
+              return
+            }
+            ts.imageDataUrl = result.data
+            const h = await registerImage(result.data)
+            ts.imageHash = h
+          })()
+        )
+      }
     }
 
     // Backward compat: default orientation
@@ -562,10 +675,10 @@
 <UpdateToast />
 <GpuToast />
 
-{#if isSaving}
-  <div class="saving-overlay">
-    <div class="saving-spinner"></div>
-    <span class="saving-text">Saving...</span>
+{#if isSaving || isLoading}
+  <div class="loading-overlay">
+    <div class="loading-spinner"></div>
+    <span class="loading-text">{isSaving ? 'Saving...' : loadingMessage}</span>
   </div>
 {/if}
 
@@ -603,7 +716,7 @@
     background: var(--accent);
   }
 
-  .saving-overlay {
+  .loading-overlay {
     position: fixed;
     inset: 0;
     z-index: 2000;
@@ -615,7 +728,7 @@
     pointer-events: all;
   }
 
-  .saving-spinner {
+  .loading-spinner {
     width: 18px;
     height: 18px;
     border: 2.5px solid var(--text-muted);
@@ -628,7 +741,7 @@
     to { transform: rotate(360deg); }
   }
 
-  .saving-text {
+  .loading-text {
     font-size: 14px;
     color: var(--text-primary);
     font-weight: 600;

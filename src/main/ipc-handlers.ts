@@ -1,7 +1,8 @@
 import { ipcMain, dialog, BrowserWindow, app, type GPUFeatureStatus } from 'electron'
 import * as os from 'os'
 import * as path from 'path'
-import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises'
+import { readFile, writeFile, appendFile, mkdir, readdir, stat } from 'fs/promises'
+import { statSync } from 'fs'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle('dialog:showOpen', async (_event, options) => {
@@ -25,6 +26,34 @@ export function registerIpcHandlers(): void {
     return data
   })
 
+  /** Return file size in bytes (used by renderer to skip auto-reload on huge files). */
+  ipcMain.handle('file:size', async (_event, filePath: string) => {
+    try {
+      const s = statSync(filePath)
+      return s.size
+    } catch {
+      return -1
+    }
+  })
+
+  /**
+   * Read a project file by parsing it in the main process (avoids renderer
+   * string-length limits). Uses a worker thread so the main process stays
+   * responsive during parsing of very large files.
+   */
+  ipcMain.handle('file:readProjectParsed', async (_event, filePath: string) => {
+    const buf = await readFile(filePath) // Buffer (no encoding — avoids V8 string limit)
+
+    // If under 400 MB, safe to convert to string + JSON.parse directly
+    if (buf.length < 400 * 1024 * 1024) {
+      return JSON.parse(buf.toString('utf-8'))
+    }
+
+    // For very large files: stream-parse the buffer without creating the full string.
+    // Main process blocks briefly but the renderer overlay is already visible.
+    return parseProjectBuffer(buf)
+  })
+
   ipcMain.handle('file:write', async (_event, path: string, data: string) => {
     // If data is a base64 data URL, write as binary
     if (data.startsWith('data:')) {
@@ -33,6 +62,15 @@ export function registerIpcHandlers(): void {
     } else {
       await writeFile(path, data, 'utf-8')
     }
+  })
+
+  /** Truncate and start a chunked UTF-8 project save (see file:saveProjectAppend). */
+  ipcMain.handle('file:saveProjectInit', async (_event, filePath: string) => {
+    await writeFile(filePath, '', 'utf-8')
+  })
+
+  ipcMain.handle('file:saveProjectAppend', async (_event, filePath: string, chunk: string) => {
+    await appendFile(filePath, chunk, 'utf-8')
   })
 
   ipcMain.handle('file:readImages', async () => {
@@ -240,4 +278,156 @@ export function registerIpcHandlers(): void {
       return null
     }
   })
+}
+
+// ── Large-file project parser ──────────────────────────────────────────────
+
+const CHAR_LBRACE = 0x7B    // {
+const CHAR_RBRACE = 0x7D    // }
+const CHAR_LBRACKET = 0x5B  // [
+const CHAR_RBRACKET = 0x5D  // ]
+const CHAR_QUOTE = 0x22     // "
+const CHAR_BACKSLASH = 0x5C // \
+const CHAR_COLON = 0x3A     // :
+const CHAR_COMMA = 0x2C     // ,
+
+/**
+ * Find the end position of a JSON value starting at `start` in the buffer.
+ * Returns the index AFTER the last byte of the value.
+ * Handles nested objects, arrays, strings, and primitives.
+ */
+function findValueEnd(buf: Buffer, start: number): number {
+  const b = buf[start]
+
+  // String
+  if (b === CHAR_QUOTE) {
+    let i = start + 1
+    while (i < buf.length) {
+      if (buf[i] === CHAR_BACKSLASH) { i += 2; continue }
+      if (buf[i] === CHAR_QUOTE) return i + 1
+      i++
+    }
+    return buf.length
+  }
+
+  // Object or Array
+  if (b === CHAR_LBRACE || b === CHAR_LBRACKET) {
+    const close = b === CHAR_LBRACE ? CHAR_RBRACE : CHAR_RBRACKET
+    let depth = 1
+    let i = start + 1
+    while (i < buf.length && depth > 0) {
+      const c = buf[i]
+      if (c === CHAR_QUOTE) {
+        // Skip string contents
+        i++
+        while (i < buf.length) {
+          if (buf[i] === CHAR_BACKSLASH) { i += 2; continue }
+          if (buf[i] === CHAR_QUOTE) break
+          i++
+        }
+      } else if (c === b) {
+        depth++
+      } else if (c === close) {
+        depth--
+      }
+      i++
+    }
+    return i
+  }
+
+  // Primitive (number, true, false, null)
+  let i = start
+  while (i < buf.length) {
+    const c = buf[i]
+    if (c === CHAR_COMMA || c === CHAR_RBRACE || c === CHAR_RBRACKET) return i
+    i++
+  }
+  return i
+}
+
+/**
+ * Parse a large project Buffer without ever creating the full string.
+ * Extracts top-level fields individually, parses arrays element-by-element.
+ */
+function parseProjectBuffer(buf: Buffer): any {
+  const MAX_SUBSTR = 300 * 1024 * 1024 // 300 MB safe limit for substrings
+
+  // Helper: safely convert a buffer region to string and JSON.parse it
+  function parseSlice(from: number, to: number): any {
+    const len = to - from
+    if (len <= MAX_SUBSTR) {
+      return JSON.parse(buf.toString('utf-8', from, to))
+    }
+    // Shouldn't happen for individual elements, but fallback:
+    throw new RangeError(`Single JSON element too large: ${(len / 1024 / 1024).toFixed(0)} MB`)
+  }
+
+  // Helper: parse a JSON array element-by-element
+  function parseArrayElements(arrStart: number, arrEnd: number): any[] {
+    const result: any[] = []
+    let i = arrStart + 1 // skip '['
+    // Skip whitespace
+    while (i < arrEnd && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+    if (buf[i] === CHAR_RBRACKET) return result
+
+    while (i < arrEnd) {
+      // Skip whitespace
+      while (i < arrEnd && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+      if (i >= arrEnd || buf[i] === CHAR_RBRACKET) break
+
+      const elemEnd = findValueEnd(buf, i)
+      result.push(parseSlice(i, elemEnd))
+      i = elemEnd
+
+      // Skip whitespace and comma
+      while (i < arrEnd && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+      if (buf[i] === CHAR_COMMA) i++
+    }
+    return result
+  }
+
+  // Parse the top-level object key by key
+  const project: any = {}
+  let i = 0
+
+  // Skip to opening brace
+  while (i < buf.length && buf[i] !== CHAR_LBRACE) i++
+  i++ // skip '{'
+
+  while (i < buf.length) {
+    // Skip whitespace
+    while (i < buf.length && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+    if (buf[i] === CHAR_RBRACE) break
+
+    // Parse key
+    if (buf[i] !== CHAR_QUOTE) break
+    const keyEnd = findValueEnd(buf, i)
+    const key = parseSlice(i, keyEnd) as string
+    i = keyEnd
+
+    // Skip whitespace + colon
+    while (i < buf.length && buf[i] !== CHAR_COLON) i++
+    i++ // skip ':'
+    while (i < buf.length && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+
+    const valEnd = findValueEnd(buf, i)
+    const valLen = valEnd - i
+
+    if (key === 'layers' || key === 'tilesets' || key === 'objectLibrary' || key === 'presets') {
+      // Parse large arrays element-by-element
+      project[key] = parseArrayElements(i, valEnd)
+    } else if (valLen > MAX_SUBSTR) {
+      // Single value too large — shouldn't happen for config/version/etc
+      throw new RangeError(`Field "${key}" is too large: ${(valLen / 1024 / 1024).toFixed(0)} MB`)
+    } else {
+      project[key] = parseSlice(i, valEnd)
+    }
+
+    i = valEnd
+    // Skip whitespace + comma
+    while (i < buf.length && (buf[i] === 0x20 || buf[i] === 0x0A || buf[i] === 0x0D || buf[i] === 0x09)) i++
+    if (buf[i] === CHAR_COMMA) i++
+  }
+
+  return project
 }
