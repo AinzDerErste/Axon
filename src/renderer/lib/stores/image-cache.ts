@@ -32,14 +32,10 @@ export async function registerImage(dataUrl: string): Promise<string> {
     return hash
   }
 
-  const img = new Image()
-  img.src = dataUrl
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve()
-    img.onerror = () => reject(new Error('Failed to load image'))
-  })
-  const bitmap = await createImageBitmap(img)
-  img.src = '' // Release decoded image data
+  // Convert data URL → Blob → createImageBitmap (skips Image element entirely)
+  const resp = await fetch(dataUrl)
+  const blob = await resp.blob()
+  const bitmap = await createImageBitmap(blob)
 
   cache.set(hash, { dataUrl, bitmap, refCount: 1 })
   return hash

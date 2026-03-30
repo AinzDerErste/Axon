@@ -435,10 +435,19 @@
       }
     }
 
-    // Wait for all image registrations to complete
+    // Include library image registration in the same parallel batch
+    if (project.objectLibrary && Array.isArray(project.objectLibrary)) {
+      for (const item of project.objectLibrary) {
+        if (item.imageDataUrl) {
+          imagePromises.push(registerImage(item.imageDataUrl).then(h => { item._hash = h }))
+        }
+      }
+    }
+
+    // Wait for all image registrations to complete (tilesets + objects + library)
     await Promise.all(imagePromises)
 
-    // Restore object library
+    // Restore object library (bitmaps already cached, no extra decode)
     if (project.objectLibrary && Array.isArray(project.objectLibrary)) {
       await deserializeLibrary(project.objectLibrary)
     } else {
