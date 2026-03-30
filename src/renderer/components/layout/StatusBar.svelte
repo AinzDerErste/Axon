@@ -15,11 +15,24 @@
 
   let toastVisible = $state(false)
   let toastTimer: ReturnType<typeof setTimeout> | null = null
+  let toastMessage = $state('Project saved')
+  let toastColor = $state('#a6e3a1')
 
   function showSaveToast() {
+    toastMessage = 'Project saved'
+    toastColor = '#a6e3a1'
     toastVisible = true
     if (toastTimer) clearTimeout(toastTimer)
     toastTimer = setTimeout(() => { toastVisible = false }, 2500)
+  }
+
+  function showLoadToast(ms: number) {
+    const sec = (ms / 1000).toFixed(1)
+    toastMessage = `Project loaded in ${sec}s`
+    toastColor = '#89b4fa'
+    toastVisible = true
+    if (toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { toastVisible = false }, 3500)
   }
 
   onMount(() => {
@@ -68,7 +81,9 @@
     })
 
     function handleProjectSaved() { showSaveToast() }
+    function handleProjectLoaded(e: Event) { showLoadToast((e as CustomEvent).detail.ms) }
     window.addEventListener('project-saved', handleProjectSaved)
+    window.addEventListener('project-loaded', handleProjectLoaded)
 
     async function updateMetrics() {
       try {
@@ -87,6 +102,7 @@
       unsub1(); unsub2(); clearInterval(interval)
       if (statsTimer) clearTimeout(statsTimer)
       window.removeEventListener('project-saved', handleProjectSaved)
+      window.removeEventListener('project-loaded', handleProjectLoaded)
       if (toastTimer) clearTimeout(toastTimer)
     }
   })
@@ -110,11 +126,11 @@
 </div>
 
 {#if toastVisible}
-  <div class="save-toast" class:toast-exit={!toastVisible}>
+  <div class="save-toast" style="color: {toastColor};">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="20 6 9 17 4 12"></polyline>
     </svg>
-    Project saved
+    {toastMessage}
   </div>
 {/if}
 

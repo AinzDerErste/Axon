@@ -125,9 +125,12 @@
       loadingMessage = 'Reopening project...'
       ;(async () => {
         await yieldToUI()
+        const t0 = performance.now()
         try {
           const project = await window.electronAPI.readProjectParsed(currentFilePath!)
           await loadProject(project)
+          const ms = Math.round(performance.now() - t0)
+          window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms } }))
         } catch (e) {
           console.error('Failed to restore project on reload:', e)
           setCurrentFilePath(null)
@@ -347,9 +350,12 @@
     isLoading = true
     loadingMessage = 'Opening project...'
     await yieldToUI()
+    const t0 = performance.now()
     try {
       const project = await window.electronAPI.readProjectParsed(currentFilePath!)
       await loadProject(project)
+      const ms = Math.round(performance.now() - t0)
+      window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms } }))
     } catch (err) {
       console.error('[Axon] Open failed:', err)
       alert(`Failed to open project:\n${err instanceof Error ? err.message : String(err)}`)
