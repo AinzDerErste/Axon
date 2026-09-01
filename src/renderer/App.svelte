@@ -23,6 +23,7 @@
     registerImage, getDataUrl, clearAll as clearImageCache
   } from './lib/stores/image-cache'
   import { reconstructFromSections } from './lib/axon-v2-decode'
+  import { readCamera, applyCamera } from './lib/stores/camera-store'
   import { FEATURES } from '../shared/feature-flags'
   import {
     getSettings, subscribe as settingsSubscribe
@@ -142,6 +143,8 @@
           const bytes = result.bytes || 0
           const readMs = result.readMs || 0
           const timings = await loadProject(project)
+          // Restore the saved view; the canvas has already centred itself by now.
+          applyCamera(project.camera)
           const ms = Math.round(performance.now() - t0)
           window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
         } catch (e) {
@@ -293,7 +296,7 @@
       layers,
       tilesets,
       activeLayerId: map.activeLayerId,
-      camera: { x: 0, y: 0, zoom: 1 },
+      camera: readCamera() || { x: 0, y: 0, zoom: 1 },
       objectLibrary: serializeLibrary(),
       presets: serializePresets()
     }
@@ -418,6 +421,8 @@
       const bytes = result.bytes || 0
       const readMs = result.readMs || 0
       const timings = await loadProject(project)
+      // Restore the saved view; the canvas has already centred itself by now.
+      applyCamera(project.camera)
       const ms = Math.round(performance.now() - t0)
       window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
     } catch (err) {

@@ -40,6 +40,7 @@
   import SketchToolbar from './SketchToolbar.svelte'
   import CollabOverlay from '../collab/CollabOverlay.svelte'
   import { FEATURES } from '../../../shared/feature-flags'
+  import { registerCamera } from '../../lib/stores/camera-store'
   import { collabStore } from '../../lib/collab/collab-store'
   import { lockStore } from '../../lib/collab/lock-store'
   import * as collabClient from '../../lib/collab/collab-client'
@@ -533,6 +534,22 @@
   onMount(() => {
     renderer = new MapRenderer(canvasEl)
     resizeCanvas()
+
+    // Let save/load reach the camera, which otherwise only exists on this
+    // renderer instance.
+    const unregisterCamera = registerCamera({
+      read: () => ({ x: renderer.camera.x, y: renderer.camera.y, zoom: renderer.camera.zoom }),
+      write: (state) => {
+        renderer.camera.x = state.x
+        renderer.camera.y = state.y
+        renderer.camera.zoom = Math.max(
+          renderer.camera.minZoom,
+          Math.min(renderer.camera.maxZoom, state.zoom)
+        )
+        setZoomPercent(renderer.camera.zoom * 100)
+        renderer.markDirty()
+      }
+    })
 
     let lastMapConfigKey = ''
     const unsub = mapSubscribe(() => {
@@ -2315,6 +2332,7 @@
     window.addEventListener('jump-to', handleJumpTo)
 
     return () => {
+      unregisterCamera()
       unsub()
       unsubSel()
       unsubSketch()
