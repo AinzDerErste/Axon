@@ -1,9 +1,16 @@
 /**
- * Axon v2 binary file format codec.
+ * Axon v2/v3 binary file format codec.
+ *
+ * v3 changes (v2 files stay readable):
+ *   - tile records carry an explicit opcode, so the empty-cell marker can no
+ *     longer be confused with tileset index 0 (which used to shift the whole
+ *     grid when a tile referenced a deleted tileset)
+ *   - tileset index widened to uint16, grid dimensions to uint32
+ *   - image dedup uses SHA-1 instead of a length/head/tail fingerprint
  *
  * File layout:
  *   [0x00] Magic "AXON" (4 bytes)
- *   [0x04] Version uint16 LE = 2
+ *   [0x04] Version uint16 LE = 3 (2 = legacy, still readable)
  *   [0x06] Section count uint16 LE
  *   [0x08] Section table: N × 10 bytes (type:u16 + offset:u32 + length:u32)
  *   [...]  Section data (each independently gzipped)
@@ -15,11 +22,21 @@
  */
 
 import { gzipSync, gunzipSync } from 'zlib'
+import { createHash } from 'crypto'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MAGIC = Buffer.from('AXON', 'ascii')
-const FORMAT_VERSION = 2
+const FORMAT_VERSION = 3
+const READABLE_VERSIONS = new Set([2, 3])
+
+/** v3 tile stream opcodes */
+const OP_EMPTY_RUN = 0x00
+const OP_TILE = 0x01
+
+const MAX_TILESET_INDEX = 0xFFFF
+const MAX_TILE_INDEX = 0xFFFF
+const MAX_GRID_DIM = 0xFFFFFFFF
 
 const SECTION_METADATA = 0x01
 const SECTION_IMAGE_BLOBS = 0x02
@@ -49,13 +66,15 @@ function rawToDataUrl(mimeCode: number, bytes: Buffer): string {
   return `data:${mime};base64,${bytes.toString('base64')}`
 }
 
-/** Simple content hash for deduplication (length + first/last bytes) */
+/**
+ * Content hash for image deduplication.
+ *
+ * Must be a real digest: the previous fingerprint (length + first 64 + last 32
+ * bytes) collided for same-size tiles sliced from one spritesheet, which made
+ * different tiles share a single blob after a reload.
+ */
 function hashBytes(bytes: Buffer): string {
-  const len = bytes.length
-  if (len === 0) return '0:'
-  const head = bytes.subarray(0, Math.min(64, len)).toString('hex')
-  const tail = len > 64 ? bytes.subarray(len - 32).toString('hex') : ''
-  return `${len}:${head}:${tail}`
+  return createHash('sha1').update(bytes).digest('hex')
 }
 
 // ── Image Blob Table ─────────────────────────────────────────────────────────
@@ -138,51 +157,71 @@ function decodeBlobTable(buf: Buffer): BlobEntry[] {
   return blobs
 }
 
-// ── Tile Grid Encoding ───────────────────────────────────────────────────────
+// ── Tile Grid Encoding ─────────────────────────────────────────────
 
+/**
+ * Encode a tile grid (v3).
+ *
+ * Header:  cols uint32 LE, rows uint32 LE
+ * Records: 0x00 <count uint32 LE>                    — run of empty cells
+ *          0x01 <tilesetIdx uint16 LE> <tileIdx uint16 LE>  — placed tile
+ *
+ * The opcode makes the stream unambiguous. In v2 an empty cell and tileset
+ * index 0 were the same byte, so a tile pointing at a deleted tileset shifted
+ * every following cell of the grid.
+ */
 function encodeTileGrid(
   data: any[][],
   tilesetIndexMap: Map<string, number>,
   rows: number,
   cols: number
 ): Buffer {
-  // Worst case: 4 header + rows*cols*3 (all placed tiles)
-  const buf = Buffer.alloc(4 + rows * cols * 5)
+  if (rows > MAX_GRID_DIM || cols > MAX_GRID_DIM) {
+    throw new Error(`Map too large to save: ${cols}×${rows} exceeds ${MAX_GRID_DIM} cells per axis`)
+  }
+
+  // Worst case: 8 byte header + 5 byte per cell (opcode + two uint16)
+  const buf = Buffer.alloc(8 + rows * cols * 5)
   let offset = 0
 
-  buf.writeUInt16LE(cols, offset); offset += 2
-  buf.writeUInt16LE(rows, offset); offset += 2
+  buf.writeUInt32LE(cols, offset); offset += 4
+  buf.writeUInt32LE(rows, offset); offset += 4
 
-  // Flatten to row-major, encode with RLE for empty runs
   let emptyRun = 0
 
-  function flushEmpty() {
-    while (emptyRun > 0) {
-      if (emptyRun === 1) {
-        buf.writeUInt8(0x00, offset); offset += 1
-        emptyRun = 0
-      } else {
-        const count = Math.min(emptyRun, 65535)
-        buf.writeUInt8(0x00, offset); offset += 1
-        buf.writeUInt16LE(0xFFFF, offset); offset += 2
-        buf.writeUInt16LE(count, offset); offset += 2
-        emptyRun -= count
-      }
-    }
+  function flushEmpty(): void {
+    if (emptyRun === 0) return
+    buf.writeUInt8(OP_EMPTY_RUN, offset); offset += 1
+    buf.writeUInt32LE(emptyRun, offset); offset += 4
+    emptyRun = 0
   }
 
   for (let r = 0; r < rows; r++) {
     const row = data[r]
     for (let c = 0; c < cols; c++) {
       const cell = row?.[c]
-      if (!cell) {
+      const tsIdx = cell ? tilesetIndexMap.get(cell.tilesetId) : undefined
+
+      // No cell, or a cell pointing at a tileset that no longer exists.
+      // The tile reference is unusable either way — write it as empty rather
+      // than emitting a record the decoder cannot resolve.
+      if (!cell || tsIdx === undefined) {
         emptyRun++
         continue
       }
+
+      if (tsIdx > MAX_TILESET_INDEX) {
+        throw new Error(`Too many tilesets to save: index ${tsIdx} exceeds ${MAX_TILESET_INDEX}`)
+      }
+      const tileIndex = cell.tileIndex | 0
+      if (tileIndex < 0 || tileIndex > MAX_TILE_INDEX) {
+        throw new Error(`Tile index ${tileIndex} out of range (0–${MAX_TILE_INDEX}) in tileset "${cell.tilesetId}"`)
+      }
+
       flushEmpty()
-      const tsIdx = tilesetIndexMap.get(cell.tilesetId) ?? 0
-      buf.writeUInt8(tsIdx, offset); offset += 1
-      buf.writeUInt16LE(cell.tileIndex, offset); offset += 2
+      buf.writeUInt8(OP_TILE, offset); offset += 1
+      buf.writeUInt16LE(tsIdx, offset); offset += 2
+      buf.writeUInt16LE(tileIndex, offset); offset += 2
     }
   }
   flushEmpty()
@@ -190,7 +229,60 @@ function encodeTileGrid(
   return buf.subarray(0, offset)
 }
 
-function decodeTileGrid(buf: Buffer, tilesetIds: string[]): any[][] {
+/** Decode a v3 tile stream. */
+function decodeTileGridV3(buf: Buffer, tilesetIds: string[]): any[][] {
+  let offset = 0
+  const cols = buf.readUInt32LE(offset); offset += 4
+  const rows = buf.readUInt32LE(offset); offset += 4
+
+  const data: any[][] = []
+  for (let i = 0; i < rows; i++) data.push(new Array(cols).fill(null))
+
+  let r = 0, c = 0
+
+  function advance(n: number): void {
+    while (n > 0 && r < rows) {
+      const step = Math.min(n, cols - c)
+      c += step
+      n -= step
+      if (c >= cols) { c = 0; r++ }
+    }
+  }
+
+  while (offset < buf.length && r < rows) {
+    const op = buf.readUInt8(offset); offset += 1
+
+    if (op === OP_EMPTY_RUN) {
+      const count = buf.readUInt32LE(offset); offset += 4
+      advance(count)
+      continue
+    }
+
+    if (op === OP_TILE) {
+      const tsIdx = buf.readUInt16LE(offset); offset += 2
+      const tileIndex = buf.readUInt16LE(offset); offset += 2
+      if (r < rows && c < cols) {
+        data[r][c] = { tilesetId: tilesetIds[tsIdx] || '', tileIndex }
+      }
+      advance(1)
+      continue
+    }
+
+    throw new Error(`Corrupt tile stream: unknown opcode 0x${op.toString(16)} at byte ${offset - 1}`)
+  }
+
+  return data
+}
+
+/**
+ * Decode a legacy v2 tile stream.
+ *
+ * Kept as-is so existing .axon files keep opening. It carries the v2 ambiguity
+ * (0x00 means both "empty cell" and "tileset index 0"), which is exactly why
+ * v3 exists — a v2 file written after a tileset was deleted may already be
+ * shifted and cannot be recovered here.
+ */
+function decodeTileGridV2(buf: Buffer, tilesetIds: string[]): any[][] {
   let offset = 0
   const cols = buf.readUInt16LE(offset); offset += 2
   const rows = buf.readUInt16LE(offset); offset += 2
@@ -198,7 +290,6 @@ function decodeTileGrid(buf: Buffer, tilesetIds: string[]): any[][] {
   const data: any[][] = []
   let r = 0, c = 0
 
-  // Pre-allocate rows
   for (let i = 0; i < rows; i++) {
     data.push(new Array(cols).fill(null))
   }
@@ -207,12 +298,9 @@ function decodeTileGrid(buf: Buffer, tilesetIds: string[]): any[][] {
     const b = buf.readUInt8(offset); offset += 1
 
     if (b === 0x00) {
-      // Empty cell or RLE run
       if (offset + 1 < buf.length && buf.readUInt16LE(offset) === 0xFFFF) {
-        // RLE empty run
         offset += 2
         const count = buf.readUInt16LE(offset); offset += 2
-        // Skip 'count' cells (already null)
         let remaining = count
         while (remaining > 0 && r < rows) {
           const skip = Math.min(remaining, cols - c)
@@ -221,12 +309,10 @@ function decodeTileGrid(buf: Buffer, tilesetIds: string[]): any[][] {
           if (c >= cols) { c = 0; r++ }
         }
       } else {
-        // Single empty
         c++
         if (c >= cols) { c = 0; r++ }
       }
     } else {
-      // Placed tile: tsIdx(already read as b) + tileIndex
       const tileIndex = buf.readUInt16LE(offset); offset += 2
       if (r < rows && c < cols) {
         data[r][c] = { tilesetId: tilesetIds[b] || '', tileIndex }
@@ -237,6 +323,13 @@ function decodeTileGrid(buf: Buffer, tilesetIds: string[]): any[][] {
   }
 
   return data
+}
+
+/** Decode a tile stream written by format version `version`. */
+function decodeTileGrid(buf: Buffer, tilesetIds: string[], version: number): any[][] {
+  return version >= 3
+    ? decodeTileGridV3(buf, tilesetIds)
+    : decodeTileGridV2(buf, tilesetIds)
 }
 
 // ── Metadata ─────────────────────────────────────────────────────────────────
@@ -337,29 +430,28 @@ function buildMetadata(project: any, blobTable: BlobTableResult, tileLayerIndice
     return out
   })
 
-  const objectLibrary = (project.objectLibrary || []).map((o: any) => ({
-    name: o.name,
-    imageIndex: resolveImageIndex(o.imageDataUrl, blobTable),
-    width: o.width,
-    height: o.height
-  }))
+  // Keep every field except the inlined image; a whitelist here silently
+  // dropped ids, categories and tags on every save.
+  const objectLibrary = (project.objectLibrary || []).map((o: any) => {
+    const { imageDataUrl: _img, ...rest } = o
+    return { ...rest, imageIndex: resolveImageIndex(o.imageDataUrl, blobTable) }
+  })
 
-  const presets = (project.presets || []).map((p: any) => ({
-    id: p.id, name: p.name, width: p.width, height: p.height,
-    tileLayers: p.tileLayers,
-    objects: (p.objects || []).map((o: any) => ({
-      name: o.name,
-      imageIndex: resolveImageIndex(o.imageDataUrl, blobTable),
-      relX: o.relX, relY: o.relY,
-      width: o.width, height: o.height,
-      flipX: o.flipX, flipY: o.flipY, rotation: o.rotation
-    })),
-    zones: p.zones || [],
-    thumbnailIndex: p.thumbnail ? resolveImageIndex(p.thumbnail, blobTable) : undefined
-  }))
+  const presets = (project.presets || []).map((p: any) => {
+    const { thumbnail: _thumb, objects: _objs, ...rest } = p
+    return {
+      ...rest,
+      objects: (p.objects || []).map((o: any) => {
+        const { imageDataUrl: _img, ...orest } = o
+        return { ...orest, imageIndex: resolveImageIndex(o.imageDataUrl, blobTable) }
+      }),
+      zones: p.zones || [],
+      thumbnailIndex: p.thumbnail ? resolveImageIndex(p.thumbnail, blobTable) : undefined
+    }
+  })
 
   return {
-    version: 2,
+    version: FORMAT_VERSION,
     config: project.config,
     activeLayerId: project.activeLayerId,
     camera: project.camera || { x: 0, y: 0, zoom: 1 },
@@ -455,7 +547,9 @@ export function decodeAxonV2(buf: Buffer): any {
   }
 
   const version = buf.readUInt16LE(4)
-  if (version !== 2) throw new Error(`Unsupported Axon version: ${version}`)
+  if (!READABLE_VERSIONS.has(version)) {
+    throw new Error(`Unsupported Axon version: ${version}`)
+  }
 
   const sectionCount = buf.readUInt16LE(6)
 
@@ -502,7 +596,7 @@ export function decodeAxonV2(buf: Buffer): any {
       const sectionType = SECTION_TILE_BASE + l.tileDataSection
       const tileBuf = getSection(sectionType)
       if (!tileBuf) throw new Error(`Missing TILE_DATA section ${l.tileDataSection}`)
-      const data = decodeTileGrid(tileBuf, tilesetIds)
+      const data = decodeTileGrid(tileBuf, tilesetIds, version)
       return {
         type: 'tile',
         id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
@@ -588,12 +682,18 @@ export function decodeAxonV2(buf: Buffer): any {
  * Returns metadata JSON string + binary ArrayBuffers for fast IPC transfer.
  */
 export function extractV2Sections(buf: Buffer): {
+  version: number
   metadataJson: string
   blobTable: ArrayBuffer
   tileSections: { index: number; data: ArrayBuffer }[]
 } {
   if (buf.subarray(0, 4).toString('ascii') !== 'AXON') {
-    throw new Error('Not a valid Axon v2 file')
+    throw new Error('Not a valid Axon project file')
+  }
+
+  const version = buf.readUInt16LE(4)
+  if (!READABLE_VERSIONS.has(version)) {
+    throw new Error(`Unsupported Axon version: ${version}`)
   }
 
   const sectionCount = buf.readUInt16LE(6)
@@ -635,7 +735,7 @@ export function extractV2Sections(buf: Buffer): {
     }
   }
 
-  return { metadataJson, blobTable, tileSections }
+  return { version, metadataJson, blobTable, tileSections }
 }
 
 // ── Format Detection ─────────────────────────────────────────────────────────
