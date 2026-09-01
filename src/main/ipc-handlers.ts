@@ -238,7 +238,7 @@ export function registerIpcHandlers(): void {
         features: {
           compositing: features.gpu_compositing,
           canvas: (features as any)['canvas_oop_rasterization'] ?? (features as any)['2d_canvas'] ?? 'unknown',
-          rasterization: features.gpu_rasterization,
+          rasterization: (features as any)['gpu_rasterization'] ?? (features as any)['rasterization'] ?? 'unknown',
           webgl: features.webgl,
           webgl2: features.webgl2
         }
