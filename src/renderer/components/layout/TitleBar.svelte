@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import appIcon from '../../assets/icon.png'
+  import { FEATURES } from '../../../shared/feature-flags'
 
   interface MenuItem {
     label: string
@@ -27,8 +28,12 @@
         { separator: true, label: '' },
         { label: 'Export as PNG...', action: 'export-png' },
         { label: 'Export as JSON...', action: 'export-json' },
-        { label: 'Export as TMX (Tiled)...', action: 'export-tmx' },
-        { label: 'Export for Godot (.tscn)...', action: 'export-godot' },
+        ...(FEATURES.tmxExport
+          ? [{ label: 'Export as TMX (Tiled)...', action: 'export-tmx' }]
+          : []),
+        ...(FEATURES.godotExport
+          ? [{ label: 'Export for Godot (.tscn)...', action: 'export-godot' }]
+          : []),
         { separator: true, label: '' },
         { label: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' }
       ]

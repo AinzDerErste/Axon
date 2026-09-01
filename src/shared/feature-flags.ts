@@ -1,5 +1,5 @@
 /**
- * Central feature flags.
+ * Central feature flags, shared by the main and renderer processes.
  *
  * Features that are not finished or not safe to ship are switched off here
  * instead of being deleted, so the code stays reviewable and can be re-enabled
@@ -20,7 +20,27 @@ export const FEATURES = {
    *    without bound.
    *  - no heartbeat/timeout and no cap on snapshot memory.
    */
-  collab: false
+  collab: false,
+
+  /**
+   * TMX (Tiled) export.
+   *
+   * OFF — lossy without telling the user:
+   *  - paths/waypoints are not exported at all.
+   *  - every orientation except 'staggered' is written as 'isometric', so an
+   *    orthogonal map opens as an isometric one in Tiled.
+   */
+  tmxExport: false,
+
+  /**
+   * Godot 4 (.tscn) export.
+   *
+   * OFF — lossy without telling the user:
+   *  - paths/waypoints are not exported at all.
+   *  - tile flips are dropped (`alternative_tile` is always written as 0).
+   *  - object rotation is not carried into the scene.
+   */
+  godotExport: false
 } as const
 
 export type FeatureName = keyof typeof FEATURES

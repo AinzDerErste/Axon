@@ -23,6 +23,7 @@
     registerImage, getDataUrl, clearAll as clearImageCache
   } from './lib/stores/image-cache'
   import { reconstructFromSections } from './lib/axon-v2-decode'
+  import { FEATURES } from '../shared/feature-flags'
   import {
     getSettings, subscribe as settingsSubscribe
   } from './lib/stores/settings-store'
@@ -176,8 +177,8 @@
       case 'open': handleOpen(); break
       case 'export-png': handleExportPng(); break
       case 'export-json': handleExportJson(); break
-      case 'export-tmx': handleExportTmx(); break
-      case 'export-godot': handleExportGodot(); break
+      case 'export-tmx': if (FEATURES.tmxExport) handleExportTmx(); break
+      case 'export-godot': if (FEATURES.godotExport) handleExportGodot(); break
       case 'map-properties': showMapPropertiesDialog = true; break
       case 'toggle-grid': window.dispatchEvent(new CustomEvent('toggle-grid')); break
       case 'settings': showSettingsDialog = true; break
