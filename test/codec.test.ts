@@ -168,6 +168,49 @@ function png(bytes: Buffer): string {
   check('camera is carried through', p.camera, out.camera)
 }
 
+// ── Presets ──
+
+{
+  const ts = [tileset('ts1')]
+  const tiles = grid(8, 8, (r, c) => ((r + c) % 3 === 0 ? { tilesetId: 'ts1', tileIndex: r * 8 + c } : null))
+  const p = {
+    version: 1,
+    config: { name: 'test' },
+    layers: [], tilesets: ts, activeLayerId: null, camera: {},
+    objectLibrary: [],
+    presets: [{
+      id: 'p1', name: 'house', width: 8, height: 8,
+      tileLayers: [{ name: 'base', tiles }],
+      objects: [{ name: 'door', imageDataUrl: png(Buffer.alloc(24, 3)), relX: 1, relY: 2, width: 8, height: 8, flipX: true, rotation: 90 }],
+      zones: [{ name: 'z', color: '#fff', points: [{ relX: 0, relY: 0 }], closed: true }],
+      thumbnail: png(Buffer.alloc(30, 4))
+    }]
+  }
+  const out = roundtrip(p)
+  check('preset tile layers survive a roundtrip', tiles, out.presets[0].tileLayers[0].tiles)
+  check('preset tile layer keeps its name', 'base', out.presets[0].tileLayers[0].name)
+  check('preset objects keep all of their fields', p.presets[0].objects[0], out.presets[0].objects[0])
+  check('preset zones survive', p.presets[0].zones, out.presets[0].zones)
+  check('preset thumbnail survives', p.presets[0].thumbnail, out.presets[0].thumbnail)
+}
+
+{
+  // Preset tiles used to be written as raw nested JSON, one object per cell.
+  const ts = [tileset('ts1')]
+  const tiles = grid(120, 120, (r, c) => ((r * c) % 7 === 0 ? { tilesetId: 'ts1', tileIndex: (r + c) % 64 } : null))
+  const p = {
+    version: 1,
+    config: { name: 'test' },
+    layers: [], tilesets: ts, activeLayerId: null, camera: {},
+    objectLibrary: [],
+    presets: [{ id: 'p1', name: 'big', width: 120, height: 120, tileLayers: [{ name: 'base', tiles }], objects: [], zones: [] }]
+  }
+  const encoded = encodeAxonV2(p)
+  const asJson = Buffer.byteLength(JSON.stringify(p), 'utf-8')
+  check('a preset-heavy project stays far below its JSON size', true, encoded.length < asJson / 20)
+  check('preset tiles still decode after compaction', tiles, roundtrip(p).presets[0].tileLayers[0].tiles)
+}
+
 // ── Format ──
 
 {

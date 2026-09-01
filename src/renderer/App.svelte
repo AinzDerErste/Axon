@@ -134,7 +134,7 @@
           const tParseStart = performance.now()
           let project: any
           if (result.__format === 'v2-sections') {
-            project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+            project = reconstructFromSections(result.sections)
           } else if (result.__format === 'json') {
             project = JSON.parse(result.json)
           } else {
@@ -372,7 +372,7 @@
       const tParseStart = performance.now()
       let project: any
       if (result.__format === 'v2-sections') {
-        project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+        project = reconstructFromSections(result.sections)
       } else if (result.__format === 'json') {
         project = JSON.parse(result.json)
       } else {

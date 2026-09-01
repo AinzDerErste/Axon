@@ -135,11 +135,17 @@ function decodeTileGridV2(buf: Uint8Array, tilesetIds: string[]): any[][] {
  * Reconstruct a full project object from v2 sections.
  * Same output shape as v1 JSON / decodeAxonV2.
  */
-export function reconstructFromSections(
-  metadataJson: string,
-  blobTableBuf: ArrayBuffer,
+export interface V2Sections {
+  version?: number
+  metadataJson: string
+  blobTable: ArrayBuffer
   tileSections: { index: number; data: ArrayBuffer }[]
-): any {
+  presetTileSections?: { index: number; data: ArrayBuffer }[]
+}
+
+export function reconstructFromSections(sections: V2Sections): any {
+  const { metadataJson, blobTable: blobTableBuf, tileSections } = sections
+  const presetTileSections = sections.presetTileSections || []
   const metadata = JSON.parse(metadataJson)
   const version: number = metadata.version ?? 2
   const blobs = blobTableBuf.byteLength > 0
@@ -153,15 +159,21 @@ export function reconstructFromSections(
   // Index tile sections by layer index
   const tileMap = new Map<number, ArrayBuffer>()
   for (const s of tileSections) tileMap.set(s.index, s.data)
+  const presetTileMap = new Map<number, ArrayBuffer>()
+  for (const s of presetTileSections) presetTileMap.set(s.index, s.data)
+
+  function decodeGrid(buf: ArrayBuffer): any[][] {
+    return version >= 3
+      ? decodeTileGridV3(new Uint8Array(buf), tilesetIds)
+      : decodeTileGridV2(new Uint8Array(buf), tilesetIds)
+  }
 
   // Reconstruct layers
   const layers = (metadata.layers || []).map((l: any) => {
     if (l.type === 'tile') {
       const tileBuf = tileMap.get(l.tileDataSection)
       if (!tileBuf) throw new Error(`Missing tile data for section ${l.tileDataSection}`)
-      const data = version >= 3
-        ? decodeTileGridV3(new Uint8Array(tileBuf), tilesetIds)
-        : decodeTileGridV2(new Uint8Array(tileBuf), tilesetIds)
+      const data = decodeGrid(tileBuf)
       return { type: 'tile', id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, data }
     }
     if (l.type === 'object') {
@@ -204,6 +216,13 @@ export function reconstructFromSections(
   // Reconstruct presets
   const presets = (metadata.presets || []).map((p: any) => ({
     ...p,
+    tileLayers: (p.tileLayers || []).map((tl: any) => {
+      // v3 keeps preset tiles in their own sections; v2 inlined them as JSON.
+      if (tl.tileDataSection === undefined) return tl
+      const buf = presetTileMap.get(tl.tileDataSection)
+      if (!buf) throw new Error(`Missing preset tile data for section ${tl.tileDataSection}`)
+      return { name: tl.name, tiles: decodeGrid(buf) }
+    }),
     objects: (p.objects || []).map((o: any) => ({
       ...o, imageDataUrl: blobToDataUrl(blobs, o.imageIndex), imageIndex: undefined
     })),

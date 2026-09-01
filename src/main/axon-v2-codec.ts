@@ -21,7 +21,7 @@
  *   0x10+ TILE_DATA_N      — gzipped RLE binary per tile layer
  */
 
-import { gzipSync, gunzipSync } from 'zlib'
+import { gzipSync, gunzipSync, brotliCompressSync, brotliDecompressSync, constants as ZLIB } from 'zlib'
 import { createHash } from 'crypto'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -40,7 +40,10 @@ const MAX_GRID_DIM = 0xFFFFFFFF
 
 const SECTION_METADATA = 0x01
 const SECTION_IMAGE_BLOBS = 0x02
-const SECTION_TILE_BASE = 0x10 // 0x10 + layerIndex
+const SECTION_TILE_BASE = 0x10     // 0x10 + layerIndex
+const SECTION_PRESET_TILE_BASE = 0x4000 // 0x4000 + presetTileLayerIndex
+const MAX_TILE_SECTIONS = SECTION_PRESET_TILE_BASE - SECTION_TILE_BASE
+const MAX_SECTION_TYPE = 0xFFFF
 
 const MIME_CODES: Record<string, number> = {
   'image/png': 0,
@@ -49,6 +52,43 @@ const MIME_CODES: Record<string, number> = {
   'image/gif': 3
 }
 const MIME_STRINGS = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+
+// ── Section compression ──────────────────────────────────────────────────────
+//
+// Text and tile streams compress far better with brotli than with gzip; image
+// blobs are already-compressed PNG/JPEG, where anything above the cheapest
+// gzip level costs seconds and saves nothing. Sections carry no compression
+// flag — gzip is recognised by its magic bytes, everything else is brotli — so
+// v2 files (all gzip) keep decoding unchanged.
+
+function brotli(buf: Buffer, quality: number): Buffer {
+  return brotliCompressSync(buf, {
+    params: {
+      [ZLIB.BROTLI_PARAM_QUALITY]: quality,
+      [ZLIB.BROTLI_PARAM_SIZE_HINT]: buf.length
+    }
+  })
+}
+
+/** JSON metadata — small enough to afford a high quality setting. */
+function compressText(buf: Buffer): Buffer {
+  return brotli(buf, 9)
+}
+
+/** Tile streams — already RLE-compacted, so a fast setting is the right trade. */
+function compressBinary(buf: Buffer): Buffer {
+  return brotli(buf, 5)
+}
+
+/** Image blobs — incompressible; only pay for the framing. */
+function compressBlobs(buf: Buffer): Buffer {
+  return gzipSync(buf, { level: 1 })
+}
+
+function decompressSection(buf: Buffer): Buffer {
+  const isGzip = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b
+  return isGzip ? gunzipSync(buf) : brotliDecompressSync(buf)
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -344,7 +384,12 @@ function resolveImageIndex(
   return blobTable.indexMap.get(hash) ?? -1
 }
 
-function buildMetadata(project: any, blobTable: BlobTableResult, tileLayerIndices: number[]): any {
+function buildMetadata(
+  project: any,
+  blobTable: BlobTableResult,
+  tileLayerIndices: number[],
+  presetTileSectionIds: Map<string, number>
+): any {
   let tileDataIdx = 0
 
   const layers = (project.layers || []).map((l: any) => {
@@ -437,10 +482,17 @@ function buildMetadata(project: any, blobTable: BlobTableResult, tileLayerIndice
     return { ...rest, imageIndex: resolveImageIndex(o.imageDataUrl, blobTable) }
   })
 
-  const presets = (project.presets || []).map((p: any) => {
-    const { thumbnail: _thumb, objects: _objs, ...rest } = p
+  const presets = (project.presets || []).map((p: any, pi: number) => {
+    const { thumbnail: _thumb, objects: _objs, tileLayers: _tl, ...rest } = p
     return {
       ...rest,
+      // Preset tiles used to sit here as raw nested JSON — one object per cell,
+      // the largest single block in most files. They now live in their own
+      // RLE-compacted sections, same as map layers.
+      tileLayers: (p.tileLayers || []).map((tl: any, li: number) => ({
+        name: tl.name,
+        tileDataSection: presetTileSectionIds.get(`${pi}:${li}`)
+      })),
       objects: (p.objects || []).map((o: any) => {
         const { imageDataUrl: _img, ...orest } = o
         return { ...orest, imageIndex: resolveImageIndex(o.imageDataUrl, blobTable) }
@@ -485,25 +537,48 @@ export function encodeAxonV2(project: any): Buffer {
       const rows = l.data?.length || 0
       const cols = rows > 0 ? (l.data[0]?.length || 0) : 0
       const raw = encodeTileGrid(l.data || [], tilesetIndexMap, rows, cols)
-      const compressed = gzipSync(raw)
-      tileSections.push({ sectionType: SECTION_TILE_BASE + tileIdx, data: compressed })
+      if (tileIdx >= MAX_TILE_SECTIONS) {
+        throw new Error(`Too many tile layers to save: ${tileIdx + 1} exceeds ${MAX_TILE_SECTIONS}`)
+      }
+      tileSections.push({ sectionType: SECTION_TILE_BASE + tileIdx, data: compressBinary(raw) })
       tileLayerIndices.push(tileIdx)
       tileIdx++
     }
   }
 
-  // 4. Build metadata section
-  const metadata = buildMetadata(project, blobTable, tileLayerIndices)
-  const metadataSection = gzipSync(Buffer.from(JSON.stringify(metadata), 'utf-8'))
+  // 4. Encode preset tile layers into their own sections
+  const presetSections: { sectionType: number; data: Buffer }[] = []
+  const presetTileSectionIds = new Map<string, number>()
+  let presetTileIdx = 0
+  ;(project.presets || []).forEach((p: any, pi: number) => {
+    ;(p.tileLayers || []).forEach((tl: any, li: number) => {
+      const tiles = tl.tiles || []
+      const rows = tiles.length
+      const cols = rows > 0 ? (tiles[0]?.length || 0) : 0
+      const raw = encodeTileGrid(tiles, tilesetIndexMap, rows, cols)
+      const sectionType = SECTION_PRESET_TILE_BASE + presetTileIdx
+      if (sectionType > MAX_SECTION_TYPE) {
+        throw new Error(`Too many preset tile layers to save: ${presetTileIdx + 1}`)
+      }
+      presetSections.push({ sectionType, data: compressBinary(raw) })
+      presetTileSectionIds.set(`${pi}:${li}`, presetTileIdx)
+      presetTileIdx++
+    })
+  })
 
-  // 5. Encode and compress blob table
-  const blobSection = gzipSync(encodeBlobTable(blobTable.blobs))
+  // 5. Build metadata section
+  const metadata = buildMetadata(project, blobTable, tileLayerIndices, presetTileSectionIds)
+  const metadataSection = compressText(Buffer.from(JSON.stringify(metadata), 'utf-8'))
 
-  // 6. Assemble file
+  // 6. Encode and compress blob table
+  const blobSection = compressBlobs(encodeBlobTable(blobTable.blobs))
+
+  // 7. Assemble file
   const sections = [
     { type: SECTION_METADATA, data: metadataSection },
     { type: SECTION_IMAGE_BLOBS, data: blobSection },
-    ...tileSections.map(s => ({ type: s.sectionType, data: s.data }))
+    ...tileSections.map(s => ({ type: s.sectionType, data: s.data })),
+    ...presetSections.map(s => ({ type: s.sectionType, data: s.data }))
   ]
 
   const sectionCount = sections.length
@@ -566,7 +641,7 @@ export function decodeAxonV2(buf: Buffer): any {
   function getSection(type: number): Buffer | null {
     const s = sections.find(s => s.type === type)
     if (!s) return null
-    return gunzipSync(buf.subarray(s.offset, s.offset + s.length))
+    return decompressSection(buf.subarray(s.offset, s.offset + s.length))
   }
 
   // 1. Decode metadata
@@ -653,6 +728,13 @@ export function decodeAxonV2(buf: Buffer): any {
   // 7. Reconstruct presets
   const presets = (metadata.presets || []).map((p: any) => ({
     ...p,
+    tileLayers: (p.tileLayers || []).map((tl: any) => {
+      // v3 keeps preset tiles in their own sections; v2 inlined them as JSON.
+      if (tl.tileDataSection === undefined) return tl
+      const tileBuf = getSection(SECTION_PRESET_TILE_BASE + tl.tileDataSection)
+      if (!tileBuf) throw new Error(`Missing PRESET_TILE_DATA section ${tl.tileDataSection}`)
+      return { name: tl.name, tiles: decodeTileGrid(tileBuf, tilesetIds, version) }
+    }),
     objects: (p.objects || []).map((o: any) => ({
       ...o,
       imageDataUrl: blobToDataUrl(o.imageIndex),
@@ -686,6 +768,7 @@ export function extractV2Sections(buf: Buffer): {
   metadataJson: string
   blobTable: ArrayBuffer
   tileSections: { index: number; data: ArrayBuffer }[]
+  presetTileSections: { index: number; data: ArrayBuffer }[]
 } {
   if (buf.subarray(0, 4).toString('ascii') !== 'AXON') {
     throw new Error('Not a valid Axon project file')
@@ -706,36 +789,38 @@ export function extractV2Sections(buf: Buffer): {
     sections.push({ type, offset: off, length: len })
   }
 
-  function decompressSection(type: number): Buffer | null {
+  function sectionByType(type: number): Buffer | null {
     const s = sections.find(s => s.type === type)
     if (!s) return null
-    return gunzipSync(buf.subarray(s.offset, s.offset + s.length))
+    return decompressSection(buf.subarray(s.offset, s.offset + s.length))
   }
 
   // Metadata → JSON string (small, fast to transfer)
-  const metaBuf = decompressSection(SECTION_METADATA)
+  const metaBuf = sectionByType(SECTION_METADATA)
   if (!metaBuf) throw new Error('Missing METADATA section')
   const metadataJson = metaBuf.toString('utf-8')
 
   // Blob table → ArrayBuffer (binary, efficient transfer)
-  const blobBuf = decompressSection(SECTION_IMAGE_BLOBS)
-  const blobTable = blobBuf
-    ? blobBuf.buffer.slice(blobBuf.byteOffset, blobBuf.byteOffset + blobBuf.byteLength)
+  const blobBuf = sectionByType(SECTION_IMAGE_BLOBS)
+  const blobTable: ArrayBuffer = blobBuf
+    ? (blobBuf.buffer.slice(blobBuf.byteOffset, blobBuf.byteOffset + blobBuf.byteLength) as ArrayBuffer)
     : new ArrayBuffer(0)
 
-  // Tile sections → ArrayBuffers
+  // Tile sections → ArrayBuffers (map layers and preset tile layers separately)
   const tileSections: { index: number; data: ArrayBuffer }[] = []
+  const presetTileSections: { index: number; data: ArrayBuffer }[] = []
   for (const s of sections) {
-    if (s.type >= SECTION_TILE_BASE) {
-      const raw = gunzipSync(buf.subarray(s.offset, s.offset + s.length))
-      tileSections.push({
-        index: s.type - SECTION_TILE_BASE,
-        data: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
-      })
+    if (s.type < SECTION_TILE_BASE) continue
+    const raw = decompressSection(buf.subarray(s.offset, s.offset + s.length))
+    const entry = {
+      index: s.type - (s.type >= SECTION_PRESET_TILE_BASE ? SECTION_PRESET_TILE_BASE : SECTION_TILE_BASE),
+      data: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer
     }
+    if (s.type >= SECTION_PRESET_TILE_BASE) presetTileSections.push(entry)
+    else tileSections.push(entry)
   }
 
-  return { version, metadataJson, blobTable, tileSections }
+  return { version, metadataJson, blobTable, tileSections, presetTileSections }
 }
 
 // ── Format Detection ─────────────────────────────────────────────────────────
