@@ -25,6 +25,8 @@ const electronAPI = {
     ipcRenderer.invoke('file:saveProjectAppend', path, chunk),
   saveProjectV2: (path: string, project: any) =>
     ipcRenderer.invoke('file:saveProjectV2', path, project) as Promise<number>,
+  saveRecovery: (name: string, project: any) =>
+    ipcRenderer.invoke('file:saveRecovery', name, project) as Promise<string>,
   ensureDir: (path: string) =>
     ipcRenderer.invoke('file:ensureDir', path),
   readImageFiles: () =>

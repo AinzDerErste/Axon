@@ -195,6 +195,10 @@ function handleMessage(msg: CollabMessage): void {
   switch (msg.type) {
     case 'welcome': {
       const { userId: assignedId, users, snapshot, entityLocks: remoteLocks } = msg.payload
+      // The server owns the id: it may hand back a different one if the
+      // requested one was already taken. Everything we send from here on has
+      // to carry the id the server actually bound to this connection.
+      if (typeof assignedId === 'string' && assignedId) userId = assignedId
       collabStore.setConnected(true)
       collabStore.setUsers(users as CollabUser[])
       if (snapshot) {

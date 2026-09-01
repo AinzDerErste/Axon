@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { WebSocketServer, WebSocket } from 'ws'
+import { randomUUID } from 'crypto'
 
 // ── Types ──
 
@@ -38,8 +39,41 @@ let users: CollabUser[] = []
 let hostUserId: string | null = null
 let mapSnapshot: string | null = null // serialized MapData JSON from host
 let snapshots: Snapshot[] = []
-const MAX_SNAPSHOTS = 20
 let activeEntityLocks: ActiveEntityLock[] = []
+let heartbeat: ReturnType<typeof setInterval> | null = null
+
+/** Largest single message accepted from a client (map snapshots are the big ones). */
+const MAX_PAYLOAD_BYTES = 128 * 1024 * 1024
+/** Snapshots are full map JSON — cap the list by bytes, not just by count. */
+const MAX_SNAPSHOTS = 20
+const MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
+/** A client that misses a heartbeat round is dropped. */
+const HEARTBEAT_MS = 30_000
+
+type TrackedSocket = WebSocket & { __alive?: boolean }
+
+function snapshotBytes(): number {
+  let total = 0
+  for (const s of snapshots) total += s.data.length
+  return total
+}
+
+/** Drop oldest snapshots until both the count and the byte budget fit. */
+function trimSnapshots(): void {
+  while (snapshots.length > MAX_SNAPSHOTS
+    || (snapshots.length > 1 && snapshotBytes() > MAX_SNAPSHOT_BYTES)) {
+    snapshots.shift()
+  }
+}
+
+/** Server-assigned, unique, bound to one socket — never taken from the message. */
+function assignUserId(requested: unknown): string {
+  const base = typeof requested === 'string' && /^[\w-]{1,64}$/.test(requested)
+    ? requested
+    : 'user-' + randomUUID().slice(0, 8)
+  if (!users.some(u => u.id === base)) return base
+  return `${base}-${randomUUID().slice(0, 8)}`
+}
 
 function broadcast(msg: CollabMessage, excludeId?: string): void {
   const data = JSON.stringify(msg)
@@ -66,10 +100,14 @@ function userListPayload(): { id: string; name: string; color: string }[] {
 function startServer(port: number): { port: number } {
   if (wss) throw new Error('Server already running')
 
-  wss = new WebSocketServer({ port })
+  wss = new WebSocketServer({ port, maxPayload: MAX_PAYLOAD_BYTES })
 
   wss.on('connection', (ws) => {
     let userId: string | null = null
+
+    const tracked = ws as TrackedSocket
+    tracked.__alive = true
+    ws.on('pong', () => { tracked.__alive = true })
 
     ws.on('message', (raw) => {
       let msg: CollabMessage
@@ -80,7 +118,11 @@ function startServer(port: number): { port: number } {
       }
 
       if (msg.type === 'join') {
-        userId = msg.sender
+        // One join per connection, and the id is assigned here and bound to
+        // this socket — taking it from the message let any client act as any
+        // other user, and a repeated join grew the user list without bound.
+        if (userId) return
+        userId = assignUserId(msg.sender)
         const user: CollabUser = {
           id: userId,
           name: msg.payload.name || 'Anonymous',
@@ -121,9 +163,11 @@ function startServer(port: number): { port: number } {
       // Forward ops, cursor, chat, lock/unlock to all other clients
       if (msg.type === 'op' || msg.type === 'cursor' || msg.type === 'chat'
           || msg.type === 'lock' || msg.type === 'unlock') {
-        broadcast(msg, userId)
+        // Stamp the connection's own id so a client cannot post as someone else.
+        const stamped = { ...msg, sender: userId }
+        broadcast(stamped, userId)
         // Also forward to host renderer (so host sees remote changes)
-        sendToRenderer('collab:message', msg)
+        sendToRenderer('collab:message', stamped)
       }
 
       // Track entity locks server-side for welcome payload
@@ -195,11 +239,27 @@ function startServer(port: number): { port: number } {
     sendToRenderer('collab:error', err.message)
   })
 
+  // Without a heartbeat, half-open connections stay in `users` forever and
+  // keep holding their entity locks.
+  heartbeat = setInterval(() => {
+    if (!wss) return
+    for (const client of wss.clients) {
+      const tracked = client as TrackedSocket
+      if (tracked.__alive === false) {
+        client.terminate()
+        continue
+      }
+      tracked.__alive = false
+      try { client.ping() } catch { /* socket already gone */ }
+    }
+  }, HEARTBEAT_MS)
+
   return { port }
 }
 
 function stopServer(): void {
   if (!wss) return
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null }
   // Close all client connections
   for (const user of users) {
     try { user.ws.close() } catch { /* ignore */ }
@@ -265,7 +325,7 @@ export function registerCollabHandlers(): void {
       data
     }
     snapshots.push(snapshot)
-    if (snapshots.length > MAX_SNAPSHOTS) snapshots.shift()
+    trimSnapshots()
     // Also update the current map snapshot for new joiners
     mapSnapshot = data
     return { id: snapshot.id, name: snapshot.name, ts: snapshot.ts }

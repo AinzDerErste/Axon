@@ -94,6 +94,22 @@ export function registerIpcHandlers(): void {
     return buf.length
   })
 
+  /**
+   * Write an autosave for a project that has no file path yet.
+   *
+   * Autosave used to do nothing at all until the project had been saved once,
+   * so a brand new map was never protected. This writes into the app's own
+   * data directory instead of guessing a location in the user's folders.
+   */
+  ipcMain.handle('file:saveRecovery', async (_event, name: string, project: any) => {
+    const dir = path.join(app.getPath('userData'), 'recovery')
+    await mkdir(dir, { recursive: true })
+    const safeName = (name || 'untitled').replace(/[<>:"/\\|?*]/g, '_').slice(0, 80)
+    const filePath = path.join(dir, `${safeName}.axon`)
+    await writeFile(filePath, encodeAxonV2(project))
+    return filePath
+  })
+
   ipcMain.handle('file:readImages', async () => {
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return []
@@ -238,7 +254,7 @@ export function registerIpcHandlers(): void {
         features: {
           compositing: features.gpu_compositing,
           canvas: (features as any)['canvas_oop_rasterization'] ?? (features as any)['2d_canvas'] ?? 'unknown',
-          rasterization: features.gpu_rasterization,
+          rasterization: (features as any)['gpu_rasterization'] ?? (features as any)['rasterization'] ?? 'unknown',
           webgl: features.webgl,
           webgl2: features.webgl2
         }

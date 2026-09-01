@@ -1,4 +1,5 @@
 import { Menu, BrowserWindow } from 'electron'
+import { FEATURES } from '../shared/feature-flags'
 
 export function createAppMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -35,14 +36,18 @@ export function createAppMenu(): void {
           label: 'Export as JSON...',
           click: () => sendMenuAction('export-json')
         },
-        {
-          label: 'Export as TMX (Tiled)...',
-          click: () => sendMenuAction('export-tmx')
-        },
-        {
-          label: 'Export for Godot (.tscn)...',
-          click: () => sendMenuAction('export-godot')
-        },
+        ...(FEATURES.tmxExport
+          ? [{
+              label: 'Export as TMX (Tiled)...',
+              click: () => sendMenuAction('export-tmx')
+            } as Electron.MenuItemConstructorOptions]
+          : []),
+        ...(FEATURES.godotExport
+          ? [{
+              label: 'Export for Godot (.tscn)...',
+              click: () => sendMenuAction('export-godot')
+            } as Electron.MenuItemConstructorOptions]
+          : []),
         { type: 'separator' },
         { role: 'quit' }
       ]

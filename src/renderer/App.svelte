@@ -23,6 +23,8 @@
     registerImage, getDataUrl, clearAll as clearImageCache
   } from './lib/stores/image-cache'
   import { reconstructFromSections } from './lib/axon-v2-decode'
+  import { readCamera, applyCamera } from './lib/stores/camera-store'
+  import { FEATURES } from '../shared/feature-flags'
   import {
     getSettings, subscribe as settingsSubscribe
   } from './lib/stores/settings-store'
@@ -110,9 +112,7 @@
       const s = getSettings()
       if (s.autosaveEnabled && s.autosaveInterval > 0) {
         autosaveTimer = setInterval(() => {
-          if (currentFilePath && getMap()) {
-            handleSave()
-          }
+          if (getMap()) handleSave({ silent: true })
         }, s.autosaveInterval * 60 * 1000)
       }
     }
@@ -133,7 +133,7 @@
           const tParseStart = performance.now()
           let project: any
           if (result.__format === 'v2-sections') {
-            project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+            project = reconstructFromSections(result.sections)
           } else if (result.__format === 'json') {
             project = JSON.parse(result.json)
           } else {
@@ -143,6 +143,8 @@
           const bytes = result.bytes || 0
           const readMs = result.readMs || 0
           const timings = await loadProject(project)
+          // Restore the saved view; the canvas has already centred itself by now.
+          applyCamera(project.camera)
           const ms = Math.round(performance.now() - t0)
           window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
         } catch (e) {
@@ -176,8 +178,8 @@
       case 'open': handleOpen(); break
       case 'export-png': handleExportPng(); break
       case 'export-json': handleExportJson(); break
-      case 'export-tmx': handleExportTmx(); break
-      case 'export-godot': handleExportGodot(); break
+      case 'export-tmx': if (FEATURES.tmxExport) handleExportTmx(); break
+      case 'export-godot': if (FEATURES.godotExport) handleExportGodot(); break
       case 'map-properties': showMapPropertiesDialog = true; break
       case 'toggle-grid': window.dispatchEvent(new CustomEvent('toggle-grid')); break
       case 'settings': showSettingsDialog = true; break
@@ -221,7 +223,7 @@
    * Build the project object and save it in v2 binary format via the main process.
    * Image dedup, RLE tile encoding, and gzip compression happen in the codec.
    */
-  async function saveProjectV2(filePath: string) {
+  function buildProjectPayload() {
     const map = getMap()!
 
     function resolveImage(o: { imageHash?: string; imageDataUrl: string }): string {
@@ -294,34 +296,72 @@
       layers,
       tilesets,
       activeLayerId: map.activeLayerId,
-      camera: { x: 0, y: 0, zoom: 1 },
+      camera: readCamera() || { x: 0, y: 0, zoom: 1 },
       objectLibrary: serializeLibrary(),
       presets: serializePresets()
     }
 
-    const bytes = await window.electronAPI.saveProjectV2(filePath, project)
-    console.log(`[Axon] Saved v2: ${(bytes / 1024 / 1024).toFixed(1)} MB`)
+    return project
+  }
+
+  /** Build the project object and save it in v3 binary format via the main process. */
+  async function saveProjectV2(filePath: string) {
+    const bytes = await window.electronAPI.saveProjectV2(filePath, buildProjectPayload())
+    console.log(`[Axon] Saved: ${(bytes / 1024 / 1024).toFixed(1)} MB`)
   }
 
   let saveInProgress = false
 
-  async function handleSave() {
+  function reportSaveError(err: unknown, silent: boolean) {
+    console.error('[Axon] Save failed:', err)
+    const message = formatSaveError(err)
+    if (silent) {
+      // An autosave must never interrupt what the user is doing with a modal.
+      window.dispatchEvent(new CustomEvent('project-save-failed', { detail: message }))
+    } else {
+      alert(`Save failed:\n${message}`)
+    }
+  }
+
+  async function handleSave({ silent = false } = {}) {
     if (saveInProgress) return
     const map = getMap()
     if (!map) return
-    if (!currentFilePath) { await handleSaveAs(); return }
+    if (!currentFilePath) {
+      if (silent) { await autosaveToRecovery(map.config.name); return }
+      await handleSaveAs()
+      return
+    }
     saveInProgress = true
-    isSaving = true
+    isSaving = !silent
     try {
       await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)))
       await saveProjectV2(currentFilePath)
       updateTitle(map.config.name)
-      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'saved' }))
+      window.dispatchEvent(new CustomEvent('project-saved', { detail: silent ? 'autosaved' : 'saved' }))
     } catch (err) {
-      console.error('[Axon] Save failed:', err)
-      alert(`Save failed:\n${formatSaveError(err)}`)
+      reportSaveError(err, silent)
     } finally {
       isSaving = false
+      saveInProgress = false
+    }
+  }
+
+  /**
+   * Autosave for a project that has never been saved to a file. Writes into
+   * the app's own data directory; previously a new map was simply never
+   * autosaved, however long it had been worked on.
+   */
+  async function autosaveToRecovery(name: string) {
+    if (saveInProgress) return
+    saveInProgress = true
+    try {
+      const path = await window.electronAPI.saveRecovery(name, buildProjectPayload())
+      window.dispatchEvent(new CustomEvent('project-saved', { detail: 'recovery', path }))
+      console.log('[Axon] Autosaved unsaved project to', path)
+    } catch (err) {
+      reportSaveError(err, true)
+    } finally {
       saveInProgress = false
     }
   }
@@ -371,7 +411,7 @@
       const tParseStart = performance.now()
       let project: any
       if (result.__format === 'v2-sections') {
-        project = reconstructFromSections(result.sections.metadataJson, result.sections.blobTable, result.sections.tileSections)
+        project = reconstructFromSections(result.sections)
       } else if (result.__format === 'json') {
         project = JSON.parse(result.json)
       } else {
@@ -381,6 +421,8 @@
       const bytes = result.bytes || 0
       const readMs = result.readMs || 0
       const timings = await loadProject(project)
+      // Restore the saved view; the canvas has already centred itself by now.
+      applyCamera(project.camera)
       const ms = Math.round(performance.now() - t0)
       window.dispatchEvent(new CustomEvent('project-loaded', { detail: { ms, tIpc, readMs, tParse, bytes, ...timings } }))
     } catch (err) {

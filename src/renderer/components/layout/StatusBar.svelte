@@ -17,13 +17,29 @@
   let toastTimer: ReturnType<typeof setTimeout> | null = null
   let toastMessage = $state('Project saved')
   let toastColor = $state('#a6e3a1')
+  let toastIsError = $state(false)
 
-  function showSaveToast() {
-    toastMessage = 'Project saved'
+  function showSaveToast(detail?: unknown) {
+    toastMessage = detail === 'recovery'
+      ? 'Autosaved (unsaved project — use Save As to choose a location)'
+      : detail === 'autosaved'
+        ? 'Autosaved'
+        : 'Project saved'
     toastColor = '#a6e3a1'
+    toastIsError = false
     toastVisible = true
     if (toastTimer) clearTimeout(toastTimer)
     toastTimer = setTimeout(() => { toastVisible = false }, 2500)
+  }
+
+  /** Autosave failures land here — a modal would interrupt whatever is being drawn. */
+  function showSaveErrorToast(message: string) {
+    toastMessage = `Autosave failed: ${message}`
+    toastColor = '#f38ba8'
+    toastIsError = true
+    toastVisible = true
+    if (toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { toastVisible = false }, 8000)
   }
 
   function showLoadToast(detail: any) {
@@ -86,10 +102,12 @@
       statsTimer = setTimeout(computeTileStats, 200)
     })
 
-    function handleProjectSaved() { showSaveToast() }
+    function handleProjectSaved(e: Event) { showSaveToast((e as CustomEvent).detail) }
     function handleProjectLoaded(e: Event) { showLoadToast((e as CustomEvent).detail) }
+    function handleSaveFailed(e: Event) { showSaveErrorToast(String((e as CustomEvent).detail)) }
     window.addEventListener('project-saved', handleProjectSaved)
     window.addEventListener('project-loaded', handleProjectLoaded)
+    window.addEventListener('project-save-failed', handleSaveFailed)
 
     async function updateMetrics() {
       try {
@@ -109,6 +127,7 @@
       if (statsTimer) clearTimeout(statsTimer)
       window.removeEventListener('project-saved', handleProjectSaved)
       window.removeEventListener('project-loaded', handleProjectLoaded)
+      window.removeEventListener('project-save-failed', handleSaveFailed)
       if (toastTimer) clearTimeout(toastTimer)
     }
   })
@@ -132,9 +151,15 @@
 </div>
 
 {#if toastVisible}
-  <div class="save-toast" style="color: {toastColor};">
+  <div class="save-toast" class:error={toastIsError} style="color: {toastColor};">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="20 6 9 17 4 12"></polyline>
+      {#if toastIsError}
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="13"></line>
+        <line x1="12" y1="16.5" x2="12" y2="16.5"></line>
+      {:else}
+        <polyline points="20 6 9 17 4 12"></polyline>
+      {/if}
     </svg>
     {toastMessage}
   </div>
@@ -186,6 +211,13 @@
     animation: toast-in 0.25s ease-out, toast-out 0.4s ease-in 2.1s forwards;
     pointer-events: none;
     z-index: 900;
+  }
+
+  /* An error needs long enough to be read, not just noticed. */
+  .save-toast.error {
+    max-width: 60ch;
+    border-color: #f38ba8;
+    animation: toast-in 0.25s ease-out, toast-out 0.4s ease-in 7.6s forwards;
   }
 
   @keyframes toast-in {

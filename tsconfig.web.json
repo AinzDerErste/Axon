@@ -12,5 +12,5 @@
     "composite": true,
     "types": []
   },
-  "include": ["src/renderer/**/*", "src/renderer/**/*.svelte"]
+  "include": ["src/shared/**/*", "src/renderer/**/*", "src/renderer/**/*.svelte"]
 }
