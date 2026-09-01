@@ -28,6 +28,19 @@ interface ElectronAPI {
   selectFolder(): Promise<string | undefined>
   scanImageMeta(folderPath: string): Promise<{ name: string; filePath: string; mtimeMs: number }[]>
   readImageFile(filePath: string): Promise<{ data: string; name: string } | null>
+
+  // Auto-update
+  getAppVersion(): Promise<string>
+  checkForUpdates(): Promise<void>
+  downloadUpdate(): Promise<void>
+  installUpdate(): Promise<void>
+  /** Opens the download page in the browser — used by builds that cannot self-update. */
+  openReleasePage(): Promise<void>
+  onUpdateAvailable(callback: (info: { version: string; releaseNotes: string; canInstall: boolean }) => void): void
+  onUpdateNotAvailable(callback: () => void): void
+  onDownloadProgress(callback: (progress: { percent: number }) => void): void
+  onUpdateDownloaded(callback: () => void): void
+  onUpdateError(callback: (message: string) => void): void
 }
 
 declare global {

@@ -8,6 +8,8 @@
   let percent = $state(0)
   let errorMsg = $state('')
   let manualCheck = $state(false)
+  /** False in builds that cannot update themselves — the portable one. */
+  let canInstall = $state(true)
   let hideTimer: ReturnType<typeof setTimeout> | null = null
 
   function autoHide(ms: number) {
@@ -20,6 +22,7 @@
 
     api?.onUpdateAvailable?.((info) => {
       version = info.version
+      canInstall = info.canInstall !== false
       state = 'available'
       manualCheck = false
     })
@@ -79,6 +82,12 @@
     window.electronAPI?.installUpdate?.()
   }
 
+  /** Portable builds cannot replace themselves; send the user to the download page. */
+  function handleOpenReleasePage() {
+    window.electronAPI?.openReleasePage?.()
+    handleDismiss()
+  }
+
   function handleDismiss() {
     state = 'hidden'
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null }
@@ -97,7 +106,11 @@
         <span class="toast-text">Axon <strong>v{version}</strong> verfügbar</span>
       </div>
       <div class="toast-actions">
-        <button class="toast-btn primary" onclick={handleDownload}>Update</button>
+        {#if canInstall}
+          <button class="toast-btn primary" onclick={handleDownload}>Update</button>
+        {:else}
+          <button class="toast-btn primary" onclick={handleOpenReleasePage}>Herunterladen</button>
+        {/if}
         <button class="toast-btn dismiss" onclick={handleDismiss} title="Dismiss">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M2 2l8 8M10 2l-8 8"/>

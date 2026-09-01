@@ -165,7 +165,7 @@ Download `Axon-x.x.x-setup.exe` from the [latest release](https://github.com/Ain
 
 ### Portable
 
-Download `Axon-x.x.x-portable.exe` from the [latest release](https://github.com/AinzDerErste/Axon/releases/latest). No installation required — runs directly. Note: the portable version does not support auto-updates.
+Download `Axon-x.x.x-portable.exe` from the [latest release](https://github.com/AinzDerErste/Axon/releases/latest). No installation required — runs directly. Note: the portable version does not update itself — it tells you when a newer version exists and opens the download page, and you replace the exe yourself.
 
 ## Development
 

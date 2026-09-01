@@ -1,5 +1,20 @@
 import { autoUpdater } from 'electron-updater'
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, shell } from 'electron'
+import { RELEASES_URL } from '../shared/app-links'
+
+/**
+ * True when running from the portable build.
+ *
+ * electron-builder's portable wrapper sets this at runtime; it is empty in the
+ * installed build. There is no portable update target in electron-builder, and
+ * latest.yml points `path` at the NSIS installer — so letting a portable user
+ * run the updater would silently install the app into AppData and leave the
+ * portable exe they launched sitting at the old version, offering the same
+ * update again on every start.
+ */
+function isPortable(): boolean {
+  return Boolean(process.env.PORTABLE_EXECUTABLE_FILE)
+}
 
 let mainWin: BrowserWindow | null = null
 let updaterInitialized = false
@@ -15,11 +30,18 @@ function registerUpdaterIpcHandlers(): void {
   })
 
   ipcMain.handle('updater:download', async () => {
+    if (isPortable()) return
     await autoUpdater.downloadUpdate()
   })
 
   ipcMain.handle('updater:install', () => {
+    if (isPortable()) return
     autoUpdater.quitAndInstall()
+  })
+
+  /** Portable builds send the user to the download page instead of self-updating. */
+  ipcMain.handle('updater:openReleasePage', async () => {
+    await shell.openExternal(RELEASES_URL)
   })
 }
 
@@ -31,15 +53,22 @@ export function initUpdater(win: BrowserWindow): void {
   if (updaterInitialized) return
   updaterInitialized = true
 
+  const portable = isPortable()
+
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  // A finished download would otherwise run the NSIS installer on quit, even
+  // without the user pressing anything.
+  autoUpdater.autoInstallOnAppQuit = !portable
 
   autoUpdater.on('update-available', (info) => {
     mainWin?.webContents.send('updater:update-available', {
       version: info.version,
       releaseNotes: typeof info.releaseNotes === 'string'
         ? info.releaseNotes
-        : ''
+        : '',
+      // The renderer offers a download link instead of an install button when
+      // this build cannot update itself.
+      canInstall: !portable
     })
   })
 
