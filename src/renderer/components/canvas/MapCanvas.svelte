@@ -39,6 +39,7 @@
   import { registerImage, registerImageSync, getBitmap } from '../../lib/stores/image-cache'
   import SketchToolbar from './SketchToolbar.svelte'
   import CollabOverlay from '../collab/CollabOverlay.svelte'
+  import { FEATURES } from '../../lib/feature-flags'
   import { collabStore } from '../../lib/collab/collab-store'
   import { lockStore } from '../../lib/collab/lock-store'
   import * as collabClient from '../../lib/collab/collab-client'
@@ -2341,7 +2342,9 @@
 <div class="canvas-wrapper" class:drawing-active={isDrawingLayerActive} bind:this={containerEl}>
   <canvas bind:this={canvasEl}></canvas>
   <SketchToolbar />
-  <CollabOverlay />
+  {#if FEATURES.collab}
+    <CollabOverlay />
+  {/if}
 </div>
 
 {#if showCanvasContextMenu}
